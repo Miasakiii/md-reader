@@ -65,12 +65,7 @@ npm run dev
 | macOS | `.dmg` | — |
 | Linux | `.deb` | `.AppImage` |
 
-一键打包 GitHub Release 资产（Windows）：
 
-```powershell
-.\scripts\build-release.ps1
-# 输出目录：release/v1.1.0/
-```
 
 
 
