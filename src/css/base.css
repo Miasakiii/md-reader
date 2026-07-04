@@ -1,0 +1,174 @@
+/* ===== Reset & Variables ===== */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  /* 浅色主题 — 温暖纸质感 */
+  --bg: #faf9f7;
+  --bg-secondary: #f3f1ed;
+  --bg-hover: #eae7e0;
+  --bg-card: #ffffff;
+  --text: #1a1a1a;
+  --text-secondary: #6b6560;
+  --text-muted: #9e9790;
+  --border: #e4dfd8;
+  --border-light: #ece8e2;
+  --accent: #c05d2c;
+  --accent-hover: #a84e24;
+  --accent-light: rgba(192, 93, 44, 0.08);
+  --accent-subtle: rgba(192, 93, 44, 0.04);
+  --code-bg: #f5f3ef;
+  --code-border: #e8e4dd;
+  --blockquote-border: #d4c4a8;
+  --blockquote-text: #7a6a55;
+  --table-border: #e4dfd8;
+  --table-row-alt: #f8f6f2;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.06);
+  --shadow-lg: 0 8px 24px rgba(0,0,0,0.08);
+  --search-highlight: #fce4a0;
+  --search-current: #f0a030;
+  --toolbar-blur: rgba(250, 249, 247, 0.85);
+
+  /* 排版 */
+  --font-sans: "Inter", "SF Pro Text", -apple-system, BlinkMacSystemFont, "Noto Sans SC", "Microsoft YaHei", "Segoe UI", Helvetica, Arial, sans-serif;
+  --font-serif: "Noto Serif SC", "Source Han Serif SC", "Georgia", "Times New Roman", serif;
+  --font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code", "SF Mono", Consolas, monospace;
+  --font-size: 16px;
+  --line-height: 1.8;
+  --content-width: 720px;
+  --content-padding: 56px;
+
+  /* 动画 */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --transition: 0.25s var(--ease-out);
+  --transition-fast: 0.15s var(--ease-out);
+}
+
+[data-theme="dark"] {
+  --bg: #191919;
+  --bg-secondary: #222222;
+  --bg-hover: #2a2a2a;
+  --bg-card: #1e1e1e;
+  --text: #e8e4de;
+  --text-secondary: #9a9490;
+  --text-muted: #6b6560;
+  --border: #333333;
+  --border-light: #2a2a2a;
+  --accent: #e07840;
+  --accent-hover: #f08850;
+  --accent-light: rgba(224, 120, 64, 0.12);
+  --accent-subtle: rgba(224, 120, 64, 0.06);
+  --code-bg: #1e1e1e;
+  --code-border: #333333;
+  --blockquote-border: #444444;
+  --blockquote-text: #8a8480;
+  --table-border: #333333;
+  --table-row-alt: #1e1e1e;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.2);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
+  --shadow-lg: 0 8px 24px rgba(0,0,0,0.4);
+  --search-highlight: #5c4b00;
+  --search-current: #b86e00;
+  --toolbar-blur: rgba(25, 25, 25, 0.85);
+}
+
+[data-theme="sepia"] {
+  --bg: #f5eed8;
+  --bg-secondary: #ede5cc;
+  --bg-hover: #e5dbc0;
+  --bg-card: #f8f2de;
+  --text: #3d3022;
+  --text-secondary: #7a6a50;
+  --text-muted: #a09080;
+  --border: #d8ccaa;
+  --border-light: #e2d8b8;
+  --accent: #b86a20;
+  --accent-hover: #a05a18;
+  --accent-light: rgba(184, 106, 32, 0.1);
+  --accent-subtle: rgba(184, 106, 32, 0.05);
+  --code-bg: #ede5cc;
+  --code-border: #d8ccaa;
+  --blockquote-border: #c8b890;
+  --blockquote-text: #7a6a50;
+  --table-border: #d8ccaa;
+  --table-row-alt: #f0e8d0;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.06);
+  --shadow-lg: 0 8px 24px rgba(0,0,0,0.08);
+  --search-highlight: #e8d490;
+  --search-current: #d4a030;
+  --toolbar-blur: rgba(245, 238, 216, 0.85);
+}
+
+html {
+  font-size: var(--font-size);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  font-family: var(--font-sans);
+  background: var(--bg);
+  color: var(--text);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transition: background var(--transition), color var(--transition);
+}
+
+/* ===== Selection ===== */
+::selection {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* ===== Scrollbar — 极简风格 ===== */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 3px;
+  transition: background 0.3s;
+}
+
+*:hover > ::-webkit-scrollbar-thumb,
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border);
+}
+
+::-webkit-scrollbar-thumb:active {
+  background: var(--text-muted);
+}
+
+/* Firefox scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+*:hover {
+  scrollbar-color: var(--border) transparent;
+}
+
+/* Hidden utility */
+.hidden { display: none !important; }
+
+/* ===== Focus Ring ===== */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}

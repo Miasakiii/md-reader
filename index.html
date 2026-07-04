@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MD Reader</title>
+  <link rel="stylesheet" href="/src/css/base.css" />
+  <link rel="stylesheet" href="/src/css/reader.css" />
+  <link rel="stylesheet" href="/src/css/editor.css" />
+  <link rel="stylesheet" href="/styles/github.min.css" id="hljs-theme" />
+</head>
+<body>
+  <!-- 阅读进度条 -->
+  <div class="reading-progress">
+    <div id="reading-progress-bar" class="reading-progress-bar"></div>
+  </div>
+
+  <!-- 顶部工具栏 -->
+  <header id="toolbar" class="toolbar">
+    <div class="toolbar-left">
+      <button id="btn-open" class="tool-btn" title="打开文件 (Ctrl+O)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/>
+        </svg>
+      </button>
+      <span id="file-name" class="file-name">MD Reader</span>
+    </div>
+    <div class="toolbar-center">
+      <button id="btn-toc" class="tool-btn" title="目录 (Ctrl+\\)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="14" y2="12"/><line x1="4" y1="18" x2="18" y2="18"/>
+        </svg>
+      </button>
+      <button id="btn-search" class="tool-btn" title="搜索 (Ctrl+F)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="11" cy="11" r="7"/><path d="m21 21-4.35-4.35"/>
+        </svg>
+      </button>
+      <button id="btn-mode" class="tool-btn" title="切换编辑/阅读 (Ctrl+E)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/>
+        </svg>
+      </button>
+    </div>
+    <div class="toolbar-right">
+      <button id="btn-theme" class="tool-btn" title="切换主题">
+        <svg id="theme-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32 1.41 1.41M2 12h2m16 0h2M4.93 19.07l1.41-1.41m11.32-11.32 1.41-1.41"/>
+        </svg>
+        <svg id="theme-icon-moon" class="hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+        </svg>
+        <svg id="theme-icon-sepia" class="hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+        </svg>
+      </button>
+      <button id="btn-font-down" class="tool-btn" title="缩小字号 (Ctrl+-)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M5 12h14"/>
+        </svg>
+      </button>
+      <button id="btn-font-up" class="tool-btn" title="放大字号 (Ctrl+=)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+        </svg>
+      </button>
+      <button id="btn-save" class="tool-btn" title="保存 (Ctrl+S)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- 搜索栏 -->
+  <div id="search-bar" class="search-bar hidden">
+    <input id="search-input" type="text" placeholder="搜索文档内容…" autocomplete="off" />
+    <span id="search-count" class="search-count"></span>
+    <button id="search-prev" class="tool-btn" title="上一个 (Shift+Enter)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"/></svg>
+    </button>
+    <button id="search-next" class="tool-btn" title="下一个 (Enter)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+    </button>
+    <button id="search-close" class="tool-btn" title="关闭 (Esc)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </button>
+  </div>
+
+  <!-- 主内容区 -->
+  <main id="main" class="main">
+    <!-- 目录侧栏 -->
+    <aside id="toc-panel" class="toc-panel hidden">
+      <div class="toc-panel-title">目录</div>
+      <div id="toc-content" class="toc-content"></div>
+    </aside>
+
+    <!-- 阅读视图 -->
+    <article id="reader-view" class="reader-view">
+      <div id="markdown-body" class="markdown-body">
+        <div class="welcome">
+          <div class="welcome-icon">📖</div>
+          <h1>MD Reader</h1>
+          <p>轻量级 Markdown 阅读器</p>
+          <p class="hint">拖拽 .md 文件到此处，或点击打开</p>
+          <p class="shortcut-hint">Ctrl+O 打开 · Ctrl+S 保存 · Ctrl+F 搜索 · Ctrl+\ 目录</p>
+        </div>
+      </div>
+    </article>
+
+    <!-- 编辑视图 -->
+    <div id="editor-view" class="editor-view hidden">
+      <div class="editor-pane">
+        <textarea id="editor-textarea" class="editor-textarea" spellcheck="false" placeholder="在此输入 Markdown…"></textarea>
+      </div>
+      <div class="editor-divider"></div>
+      <article id="editor-preview" class="reader-view editor-preview">
+        <div id="preview-body" class="markdown-body"></div>
+      </article>
+    </div>
+  </main>
+
+  <!-- 状态栏 -->
+  <footer id="statusbar" class="statusbar">
+    <div class="statusbar-left">
+      <span id="status-mode">阅读</span>
+      <span id="status-info"></span>
+    </div>
+    <div class="statusbar-right">
+      <span id="status-encoding">UTF-8</span>
+    </div>
+  </footer>
+
+  <!-- 隐藏的文件输入 -->
+  <input type="file" id="file-input" accept=".md,.markdown,.txt" style="display:none" />
+
+  <script type="module" src="/src/js/app.js"></script>
+</body>
+</html>
