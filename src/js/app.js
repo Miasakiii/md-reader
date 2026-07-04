@@ -705,25 +705,56 @@ function hideDropOverlay() {
   dropOverlay = null;
 }
 
+function isSupportedDropPath(path) {
+  const ext = path.split(/[/\\]/).pop()?.split('.').pop()?.toLowerCase();
+  return ext && ['md', 'markdown', 'txt'].includes(ext);
+}
+
 async function initNativeTauriDragDrop() {
-  // Drop is handled in Rust (WebviewEvent::DragDrop → emit file-opened).
-  // Frontend only drives the drag overlay via native Tauri events.
+  // Hybrid: frontend onDragDropEvent opens files on drop; Rust also emits file-opened as backup.
+  const handleDropPaths = paths => {
+    hideDropOverlay();
+    for (const path of paths) {
+      if (isSupportedDropPath(path)) {
+        void openFileByPath(path);
+        return;
+      }
+    }
+    if (paths?.length) {
+      showToast('不支持的文件类型，请拖入 .md / .txt 文件');
+    }
+  };
+
   const onDragPayload = payload => {
-    const { type } = payload;
+    const { type, paths } = payload;
     if (type === 'enter' || type === 'over') {
       showDropOverlay();
-    } else if (type === 'leave' || type === 'drop') {
+    } else if (type === 'leave') {
       hideDropOverlay();
+    } else if (type === 'drop') {
+      handleDropPaths(paths || []);
     }
   };
 
   try {
     const tauriWindow = await getTauriWindow();
     await tauriWindow.getCurrentWindow().onDragDropEvent(event => onDragPayload(event.payload));
-    console.log('Native Tauri drag-drop overlay registered');
+    console.log('Native Tauri drag-drop listeners registered');
     return true;
   } catch (e) {
     console.warn('Native Tauri drag-drop unavailable:', e.message || e);
+  }
+
+  try {
+    const { listen, TauriEvent } = await getTauriEvent();
+    await listen(TauriEvent.DRAG_ENTER, () => showDropOverlay());
+    await listen(TauriEvent.DRAG_OVER, () => showDropOverlay());
+    await listen(TauriEvent.DRAG_LEAVE, () => hideDropOverlay());
+    await listen(TauriEvent.DRAG_DROP, event => handleDropPaths(event.payload?.paths || []));
+    console.log('Tauri drag-drop event listeners registered');
+    return true;
+  } catch (e) {
+    console.warn('Tauri drag-drop event listeners unavailable:', e.message || e);
     showToast('原生拖放初始化失败，请使用 Ctrl+O 打开文件', 'info');
   }
 
@@ -801,7 +832,7 @@ async function init() {
   if (tauriAvailable) {
     try {
       const { listen } = await getTauriEvent();
-      listen('file-opened', event => {
+      await listen('file-opened', event => {
         hideDropOverlay();
         const path = typeof event.payload === 'string' ? event.payload : event.payload?.path;
         if (path) void openFileByPath(path);
