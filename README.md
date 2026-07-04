@@ -72,17 +72,7 @@ npm run dev
 # 输出目录：release/v1.1.0/
 ```
 
-### GitHub Release
 
-发布 v1.1.0 时，请上传 `release/v1.1.0/` 中的三个文件：
-
-| 附件 | 说明 |
-|------|------|
-| `MD-Reader-1.1.0-setup.exe` | NSIS 安装版（推荐） |
-| `MD-Reader-1.1.0-portable.exe` | 便携版单 exe |
-| `MD-Reader-1.1.0-portable.zip` | 便携版 zip（含 exe + 使用说明） |
-
-详细步骤见 [RELEASE.md](./RELEASE.md)，变更记录见 [CHANGELOG.md](./CHANGELOG.md)。
 
 ## ⌨️ 快捷键
 
@@ -164,15 +154,7 @@ md-reader/
 | 后端 | Rust | 文件读写、进度存储、窗口管理 |
 | 插件 | tauri-plugin-dialog / fs / window-state | 文件对话框、文件系统、窗口状态 |
 
-## 🖼️ 应用图标
 
-项目已包含完整图标集（`assets/app-icon.png` → `src-tauri/icons/`）。如需更换图标，从一张 **1024×1024** 正方形 PNG 重新生成：
-
-```bash
-npx @tauri-apps/cli icon assets/app-icon.png
-```
-
-生成产物包括各平台所需尺寸（`32x32.png`、`128x128.png`、`icon.icns`、`icon.ico` 等）。
 
 ## 📦 构建产物体积
 
