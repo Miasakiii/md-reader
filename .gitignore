@@ -1,7 +1,12 @@
 node_modules/
 dist/
 src-tauri/target/
+src-tauri/gen/
 release/
 *.log
 .DS_Store
 Thumbs.db
+
+# 规划文档
+RELEASE.md
+release-notes-*.md
