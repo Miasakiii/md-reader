@@ -1,6 +1,6 @@
 # Build MD Reader release assets for GitHub Release (Windows)
 param(
-    [string]$Version = "1.1.0"
+    [string]$Version = "1.1.1"
 )
 
 $ErrorActionPreference = "Stop"

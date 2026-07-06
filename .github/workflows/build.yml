@@ -142,7 +142,7 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           name: MD Reader v${{ steps.version.outputs.version }}
-          body_path: release-notes-v1.1.0.md
+          body_path: release-notes-v${{ steps.version.outputs.version }}.md
           draft: true
           files: |
             assets/windows/*

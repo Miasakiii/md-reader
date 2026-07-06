@@ -326,42 +326,38 @@ function renderMarkdown(content) {
   );
 }
 
-function renderTOC(content) {
-  const headings = [];
-  const lines = content.split('\n');
-  const slugCount = {};
-
-  for (const line of lines) {
-    const match = line.match(/^(#{1,4})\s+(.+)/);
-    if (match) {
-      const level = match[1].length;
-      const text = match[2].replace(/[*_`~\[\]]/g, '');
-      let slug = text.toLowerCase()
-        .replace(/[^\w\u4e00-\u9fff]+/g, '-')
-        .replace(/(^-|-$)/g, '');
-
-      if (slugCount[slug] !== undefined) {
-        slugCount[slug]++;
-        slug += '-' + slugCount[slug];
-      } else {
-        slugCount[slug] = 0;
-      }
-      headings.push({ level, text, slug });
-    }
+function getReaderContext() {
+  if (state.isEditMode) {
+    return {
+      scrollRoot: els.editorView.querySelector('.editor-preview'),
+      markdownBody: els.previewBody,
+    };
   }
+  return { scrollRoot: els.readerView, markdownBody: els.markdownBody };
+}
 
+function buildTOC() {
+  const { markdownBody } = getReaderContext();
+  const headings = markdownBody.querySelectorAll('h1[id], h2[id], h3[id], h4[id]');
   if (headings.length < 2) return '';
 
-  return headings.map(h =>
-    `<a class="toc-h${h.level}" href="#${h.slug}" data-slug="${h.slug}">${h.text}</a>`
-  ).join('\n');
+  return [...headings].map(h => {
+    const level = h.tagName.charAt(1);
+    const slug = h.id;
+    return `<a class="toc-h${level}" href="#${slug}" data-slug="${slug}">${escapeHtml(h.textContent)}</a>`;
+  }).join('\n');
+}
+
+function refreshTOC() {
+  els.tocContent.innerHTML = buildTOC();
+  observeHeadings();
 }
 
 function updateView(content) {
   const html = renderMarkdown(content);
   els.markdownBody.innerHTML = html;
   els.previewBody.innerHTML = html;
-  els.tocContent.innerHTML = renderTOC(content);
+  els.tocContent.innerHTML = buildTOC();
   updateStatusInfo(content);
   observeHeadings();
 }
@@ -372,26 +368,49 @@ function updateStatusInfo(content) {
   els.statusInfo.textContent = `${lines} 行 · ${chars} 字`;
 }
 
-// ========== Heading Observer (Scroll Spy) ==========
-let headingObserver = null;
+// ========== Heading Scroll Spy ==========
+const SCROLL_SPY_OFFSET = 96;
+let scrollSpyHandler = null;
+let scrollSpyRoot = null;
+
+function updateActiveHeading() {
+  const { scrollRoot, markdownBody } = getReaderContext();
+  if (!scrollRoot || !markdownBody) return;
+
+  const headings = [...markdownBody.querySelectorAll('h1[id], h2[id], h3[id], h4[id]')];
+  if (!headings.length) return;
+
+  const rootRect = scrollRoot.getBoundingClientRect();
+  let active = headings[0];
+
+  for (const h of headings) {
+    if (h.getBoundingClientRect().top - rootRect.top <= SCROLL_SPY_OFFSET) {
+      active = h;
+    } else {
+      break;
+    }
+  }
+
+  const atBottom = scrollRoot.scrollTop + scrollRoot.clientHeight >= scrollRoot.scrollHeight - 4;
+  if (atBottom) active = headings[headings.length - 1];
+
+  els.tocContent.querySelectorAll('a').forEach(a => {
+    a.classList.toggle('active', a.dataset.slug === active.id);
+  });
+}
 
 function observeHeadings() {
-  if (headingObserver) headingObserver.disconnect();
+  if (scrollSpyHandler && scrollSpyRoot) {
+    scrollSpyRoot.removeEventListener('scroll', scrollSpyHandler);
+  }
 
-  headingObserver = new IntersectionObserver(entries => {
-    for (const entry of entries) {
-      if (entry.isIntersecting) {
-        const id = entry.target.id;
-        els.tocContent.querySelectorAll('a').forEach(a => {
-          a.classList.toggle('active', a.dataset.slug === id);
-        });
-      }
-    }
-  }, { rootMargin: '-80px 0px -60% 0px' });
+  const { scrollRoot } = getReaderContext();
+  if (!scrollRoot) return;
 
-  els.markdownBody.querySelectorAll('h1[id],h2[id],h3[id],h4[id]').forEach(h => {
-    headingObserver.observe(h);
-  });
+  scrollSpyRoot = scrollRoot;
+  scrollSpyHandler = () => requestAnimationFrame(updateActiveHeading);
+  scrollRoot.addEventListener('scroll', scrollSpyHandler, { passive: true });
+  updateActiveHeading();
 }
 
 // ========== File Operations ==========
@@ -472,6 +491,8 @@ function toggleEditMode() {
     els.editorView.classList.remove('hidden');
     els.statusMode.textContent = '编辑';
     els.editorTextarea.value = state.rawContent;
+    els.previewBody.innerHTML = renderMarkdown(state.rawContent);
+    refreshTOC();
     els.editorTextarea.focus();
   } else {
     els.readerView.classList.remove('hidden');
@@ -540,9 +561,15 @@ els.tocContent.addEventListener('click', e => {
   if (!link) return;
   e.preventDefault();
   const slug = link.dataset.slug;
-  const target = els.markdownBody.querySelector(`#${CSS.escape(slug)}`);
-  if (target) {
-    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  const { scrollRoot, markdownBody } = getReaderContext();
+  const target = markdownBody.querySelector(`#${CSS.escape(slug)}`);
+  if (target && scrollRoot) {
+    const rootRect = scrollRoot.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    scrollRoot.scrollTo({
+      top: scrollRoot.scrollTop + targetRect.top - rootRect.top - SCROLL_SPY_OFFSET,
+      behavior: 'smooth',
+    });
     els.tocContent.querySelectorAll('a').forEach(a => a.classList.remove('active'));
     link.classList.add('active');
   }
@@ -670,7 +697,7 @@ els.editorTextarea.addEventListener('input', () => {
   previewTimer = setTimeout(() => {
     const content = els.editorTextarea.value;
     els.previewBody.innerHTML = renderMarkdown(content);
-    els.tocContent.innerHTML = renderTOC(content);
+    refreshTOC();
     updateStatusInfo(content);
   }, 150);
 });
