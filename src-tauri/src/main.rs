@@ -206,7 +206,8 @@ fn main() {
             match event {
                 #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
                 RunEvent::Opened { urls } => {
-                    let mut args = app.state::<CliArgs>().0.lock().unwrap();
+                    let cli_args = app.state::<CliArgs>();
+                    let mut args = cli_args.0.lock().unwrap();
                     for url in urls {
                         if let Ok(path) = url.to_file_path() {
                             let p = path.to_string_lossy().to_string();

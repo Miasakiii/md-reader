@@ -107,7 +107,7 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: always() && !cancelled() && startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
     steps:
@@ -116,6 +116,15 @@ jobs:
       - name: Get version
         id: version
         run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare release notes
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          {
+            echo "## MD Reader v${version}"
+            echo ""
+            sed -n "/^## \\[${version}\\]/,/^## \\[/p" CHANGELOG.md | head -n -1
+          } > "release-notes-v${version}.md"
 
       - name: Download Windows assets
         uses: actions/download-artifact@v4
@@ -137,13 +146,15 @@ jobs:
           path: assets/linux
         continue-on-error: true
 
-      - name: Create draft GitHub Release
+      - name: Create or update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: MD Reader v${{ steps.version.outputs.version }}
           body_path: release-notes-v${{ steps.version.outputs.version }}.md
-          draft: true
+          draft: false
+          allowUpdates: true
+          make_latest: true
           files: |
             assets/windows/*
             assets/macos/**/*
