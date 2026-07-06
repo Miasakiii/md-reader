@@ -78,6 +78,7 @@ const els = {
   progressBar: $('reading-progress-bar'),
   statusMode: $('status-mode'),
   statusInfo: $('status-info'),
+  statusEncoding: $('status-encoding'),
   fileInput: $('file-input'),
   themeIconSun: $('theme-icon-sun'),
   themeIconMoon: $('theme-icon-moon'),
@@ -140,7 +141,7 @@ async function tauriOpenFile() {
       const selected = await dialog.open({
         multiple: false,
         directory: false,
-        filters: [{ name: 'Markdown', extensions: ['md', 'markdown', 'txt'] }],
+        filters: [{ name: 'Markdown / Text', extensions: ['md', 'markdown', 'txt'] }],
       });
       if (!selected || Array.isArray(selected)) return null;
       return await tauriInvoke('read_file', { path: selected });
@@ -168,15 +169,27 @@ function isAbsoluteFilePath(path) {
   return /^([a-zA-Z]:[\\/]|\\\\|\/)/.test(path);
 }
 
+function isTxtFile(path) {
+  const ext = path?.split(/[/\\]/).pop()?.split('.').pop()?.toLowerCase();
+  return ext === 'txt';
+}
+
+function getSaveDialogOptions(path) {
+  const isTxt = isTxtFile(path || state.filePath);
+  return {
+    filters: isTxt
+      ? [{ name: 'Text', extensions: ['txt'] }, { name: 'Markdown', extensions: ['md'] }]
+      : [{ name: 'Markdown', extensions: ['md'] }, { name: 'Text', extensions: ['txt'] }],
+    defaultPath: path || (isTxt ? 'untitled.txt' : 'untitled.md'),
+  };
+}
+
 async function tauriSaveFile(path, content) {
   if (tauriAvailable) {
     try {
       if (!isAbsoluteFilePath(path)) {
         const dialog = await getTauriDialog();
-        path = await dialog.save({
-          filters: [{ name: 'Markdown', extensions: ['md'] }],
-          defaultPath: path || 'untitled.md',
-        });
+        path = await dialog.save(getSaveDialogOptions(path));
         if (!path) return false;
       }
       await tauriInvoke('save_file', { path, content });
@@ -187,10 +200,13 @@ async function tauriSaveFile(path, content) {
     }
   }
   // Browser fallback
-  const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
+  const isTxt = isTxtFile(path || state.filePath);
+  const blob = new Blob([content], {
+    type: isTxt ? 'text/plain;charset=utf-8' : 'text/markdown;charset=utf-8',
+  });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = path || 'untitled.md';
+  a.download = path || (isTxt ? 'untitled.txt' : 'untitled.md');
   a.click();
   URL.revokeObjectURL(a.href);
   return true;
@@ -297,7 +313,7 @@ function renderWelcome() {
       <div class="welcome-icon">📖</div>
       <h1>MD Reader</h1>
       <p>轻量级 Markdown 阅读器</p>
-      <p class="hint">拖拽 .md 文件到此处，或点击打开</p>
+      <p class="hint">拖拽 .md / .txt 文件到此处，或点击打开</p>
       <p class="shortcut-hint">Ctrl+O 打开 · Ctrl+S 保存 · Ctrl+F 搜索 · Ctrl+\\ 目录</p>
     </div>
     ${recentHtml}
@@ -309,6 +325,14 @@ function renderWelcome() {
 }
 
 // ========== Render ==========
+function renderPlainText(content) {
+  return `<div class="plain-text">${escapeHtml(content)}</div>`;
+}
+
+function renderContent(content, path = state.filePath) {
+  return isTxtFile(path) ? renderPlainText(content) : renderMarkdown(content);
+}
+
 function renderMarkdown(content) {
   const tocRe = /^\[\[toc\]\]\s*$/gim;
   const processed = content.replace(tocRe, '%%TOC%%');
@@ -354,12 +378,18 @@ function refreshTOC() {
 }
 
 function updateView(content) {
-  const html = renderMarkdown(content);
+  const html = renderContent(content);
   els.markdownBody.innerHTML = html;
   els.previewBody.innerHTML = html;
   els.tocContent.innerHTML = buildTOC();
   updateStatusInfo(content);
   observeHeadings();
+}
+
+function setFileEncoding(encoding) {
+  if (els.statusEncoding) {
+    els.statusEncoding.textContent = encoding || 'UTF-8';
+  }
 }
 
 function updateStatusInfo(content) {
@@ -426,6 +456,7 @@ async function openFileByPath(path) {
     state.filePath = result.path;
     state.rawContent = result.content;
     state.isDirty = false;
+    setFileEncoding(result.encoding);
 
     const name = result.path.split(/[/\\]/).pop();
     els.fileName.textContent = name;
@@ -453,6 +484,7 @@ async function openFile() {
   state.filePath = result.path;
   state.rawContent = result.content;
   state.isDirty = false;
+  setFileEncoding(result.encoding);
 
   const name = result.path.split(/[/\\]/).pop();
   els.fileName.textContent = name;
@@ -491,7 +523,7 @@ function toggleEditMode() {
     els.editorView.classList.remove('hidden');
     els.statusMode.textContent = '编辑';
     els.editorTextarea.value = state.rawContent;
-    els.previewBody.innerHTML = renderMarkdown(state.rawContent);
+    els.previewBody.innerHTML = renderContent(state.rawContent);
     refreshTOC();
     els.editorTextarea.focus();
   } else {
@@ -696,7 +728,7 @@ els.editorTextarea.addEventListener('input', () => {
   clearTimeout(previewTimer);
   previewTimer = setTimeout(() => {
     const content = els.editorTextarea.value;
-    els.previewBody.innerHTML = renderMarkdown(content);
+    els.previewBody.innerHTML = renderContent(content);
     refreshTOC();
     updateStatusInfo(content);
   }, 150);

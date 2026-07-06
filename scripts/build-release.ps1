@@ -1,6 +1,6 @@
 # Build MD Reader release assets for GitHub Release (Windows)
 param(
-    [string]$Version = "1.1.1"
+    [string]$Version = "1.1.2"
 )
 
 $ErrorActionPreference = "Stop"
@@ -42,12 +42,12 @@ MD Reader v$Version 便携版使用说明
 
 1. 解压后将 MD-Reader-$Version-portable.exe 放到任意文件夹
 2. 双击运行，无需安装
-3. 可将 .md 文件拖入窗口，或双击 .md 文件打开（便携版需手动关联）
+3. 可将 .md / .txt 文件拖入窗口，或双击 .md / .txt 文件打开（便携版需手动关联）
 4. 阅读进度、窗口大小与最近文件会自动保存
 
 系统要求：Windows 10/11（需 WebView2 运行时，通常已自带）
 
-项目主页：https://github.com/YOUR_ORG/md-reader
+项目主页：https://github.com/Miasakiii/md-reader
 "@ | Set-Content -Path $ReadmeTxt -Encoding UTF8
 
 if (Test-Path $PortableZip) { Remove-Item -Force $PortableZip }

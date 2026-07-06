@@ -79,8 +79,8 @@ jobs:
 
           1. 解压后将 MD-Reader-$version-portable.exe 放到任意文件夹
           2. 双击运行，无需安装
-          3. 可将 .md 文件拖入窗口打开
-          4. 阅读进度与窗口大小会自动保存
+          3. 可将 .md / .txt 文件拖入窗口，或双击 .md / .txt 文件打开
+          4. 阅读进度、窗口大小与最近文件会自动保存
 
           系统要求：Windows 10/11（需 WebView2 运行时）
           "@ | Set-Content -Path "$releaseDir/使用说明.txt" -Encoding UTF8

@@ -225,6 +225,17 @@
   font-family: var(--font-serif);
 }
 
+/* Plain text view */
+.plain-text {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  font-family: var(--font-serif);
+  font-size: 1rem;
+  line-height: var(--line-height);
+  color: var(--text);
+  margin: 0;
+}
+
 /* ===== Markdown Typography — 优雅阅读排版 ===== */
 .markdown-body h1,
 .markdown-body h2,

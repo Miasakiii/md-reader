@@ -2,6 +2,19 @@
 
 本文件记录 MD Reader 的重要变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [1.1.2] - 2026-07-06
+
+### Added
+
+- 纯文本 `.txt` 支持：阅读与编辑模式保留换行，等宽排版
+- 编码自动识别：UTF-8 优先，失败时回退 GB18030/GBK，状态栏显示当前编码
+- 文件关联与 CLI：`.txt` 双击打开（与 `.md` 一致）
+- 拖拽、打开/保存对话框、欢迎页文案支持 `.txt`
+
+### Changed
+
+- 版本号统一为 **1.1.2**（`package.json` / `tauri.conf.json` / `Cargo.toml`）
+
 ## [1.1.1] - 2026-07-06
 
 ### Fixed
@@ -40,5 +53,6 @@
 - 轻量级 Markdown 阅读器（Tauri 2）
 - 三种主题、目录导航、全文搜索、轻量编辑、阅读进度与窗口记忆
 
+[1.1.2]: https://github.com/Miasakiii/md-reader/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/Miasakiii/md-reader/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/Miasakiii/md-reader/compare/v1.0.0...v1.1.0

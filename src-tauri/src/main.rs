@@ -10,6 +10,7 @@ use tauri::{Emitter, Manager, RunEvent, WebviewEvent};
 struct FileData {
     path: String,
     content: String,
+    encoding: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
@@ -32,15 +33,31 @@ fn config_dir() -> PathBuf {
     dir
 }
 
-/// 读取文件内容
+/// 读取文件内容（UTF-8 优先，失败时尝试 GB18030/GBK）
 #[tauri::command]
 fn read_file(path: String) -> Result<FileData, String> {
-    let content = fs::read_to_string(&path).map_err(|e| format!("读取文件失败: {}", e))?;
+    let bytes = fs::read(&path).map_err(|e| format!("读取文件失败: {}", e))?;
 
-    // 记录到最近文件
+    if let Ok(content) = std::str::from_utf8(&bytes) {
+        save_recent_file(&path);
+        return Ok(FileData {
+            path,
+            content: content.to_string(),
+            encoding: "UTF-8".to_string(),
+        });
+    }
+
+    let (content, _, had_errors) = encoding_rs::GB18030.decode(&bytes);
+    if had_errors {
+        return Err("无法识别文件编码（非 UTF-8 或 GBK/GB18030）".to_string());
+    }
+
     save_recent_file(&path);
-
-    Ok(FileData { path, content })
+    Ok(FileData {
+        path,
+        content: content.into_owned(),
+        encoding: "GB18030".to_string(),
+    })
 }
 
 /// 保存文件内容
