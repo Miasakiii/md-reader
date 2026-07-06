@@ -177,6 +177,7 @@ jobs:
           name: MD Reader v${{ steps.version.outputs.version }}
           body_path: release-notes-v${{ steps.version.outputs.version }}.md
           draft: false
+          allowUpdates: true
           make_latest: true
           files: release-assets/*
           fail_on_unmatched_files: true
