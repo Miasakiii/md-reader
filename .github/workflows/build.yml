@@ -90,19 +90,31 @@ jobs:
           $setup = Get-ChildItem "src-tauri/target/release/bundle/nsis/*-setup.exe" | Select-Object -First 1
           Copy-Item $setup.FullName "$releaseDir/MD-Reader-$version-setup.exe"
 
-      - name: Upload Windows release folder
+      - name: Upload Windows release assets
         if: matrix.platform == 'windows-latest'
         uses: actions/upload-artifact@v4
         with:
           name: windows-release-v${{ steps.version.outputs.version }}
-          path: release/v${{ steps.version.outputs.version }}/
+          path: |
+            release/v${{ steps.version.outputs.version }}/MD-Reader-${{ steps.version.outputs.version }}-setup.exe
+            release/v${{ steps.version.outputs.version }}/MD-Reader-${{ steps.version.outputs.version }}-portable.exe
+            release/v${{ steps.version.outputs.version }}/MD-Reader-${{ steps.version.outputs.version }}-portable.zip
 
-      - name: Upload macOS/Linux bundles
-        if: matrix.platform != 'windows-latest'
+      - name: Upload macOS bundles
+        if: matrix.platform == 'macos-latest'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.platform }}-bundles
-          path: src-tauri/target/release/bundle/
+          name: macos-latest-bundles
+          path: src-tauri/target/release/bundle/dmg/*.dmg
+
+      - name: Upload Linux bundles
+        if: matrix.platform == 'ubuntu-22.04'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ubuntu-22.04-bundles
+          path: |
+            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/appimage/*.AppImage
 
   release:
     needs: build
@@ -146,6 +158,18 @@ jobs:
           path: assets/linux
         continue-on-error: true
 
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-assets
+          shopt -s nullglob
+          for f in assets/windows/*-setup.exe assets/windows/*-portable.exe assets/windows/*-portable.zip; do
+            [ -f "$f" ] && cp "$f" release-assets/
+          done
+          find assets/macos -maxdepth 3 -type f -name '*.dmg' -exec cp {} release-assets/ \;
+          find assets/linux -maxdepth 3 -type f \( -name '*.deb' -o -name '*.AppImage' \) -exec cp {} release-assets/ \;
+          echo "Release assets:"
+          ls -lh release-assets/
+
       - name: Create or update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -153,10 +177,6 @@ jobs:
           name: MD Reader v${{ steps.version.outputs.version }}
           body_path: release-notes-v${{ steps.version.outputs.version }}.md
           draft: false
-          allowUpdates: true
           make_latest: true
-          files: |
-            assets/windows/*
-            assets/macos/**/*
-            assets/linux/**/*
-          fail_on_unmatched_files: false
+          files: release-assets/*
+          fail_on_unmatched_files: true
