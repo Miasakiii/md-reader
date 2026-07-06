@@ -144,20 +144,6 @@ jobs:
           name: windows-release-v${{ steps.version.outputs.version }}
           path: assets/windows
 
-      - name: Download macOS bundles
-        uses: actions/download-artifact@v4
-        with:
-          name: macos-latest-bundles
-          path: assets/macos
-        continue-on-error: true
-
-      - name: Download Linux bundles
-        uses: actions/download-artifact@v4
-        with:
-          name: ubuntu-22.04-bundles
-          path: assets/linux
-        continue-on-error: true
-
       - name: Prepare release assets
         run: |
           mkdir -p release-assets
@@ -165,8 +151,6 @@ jobs:
           for f in assets/windows/*-setup.exe assets/windows/*-portable.exe assets/windows/*-portable.zip; do
             [ -f "$f" ] && cp "$f" release-assets/
           done
-          find assets/macos -maxdepth 3 -type f -name '*.dmg' -exec cp {} release-assets/ \;
-          find assets/linux -maxdepth 3 -type f \( -name '*.deb' -o -name '*.AppImage' \) -exec cp {} release-assets/ \;
           echo "Release assets:"
           ls -lh release-assets/
 
