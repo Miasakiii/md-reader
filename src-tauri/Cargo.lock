@@ -1711,17 +1711,18 @@ dependencies = [
 
 [[package]]
 name = "md-reader"
-version = "1.1.2"
+version = "1.2.0"
 dependencies = [
  "dirs 5.0.1",
  "encoding_rs",
+ "libc",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
- "tauri-plugin-fs",
  "tauri-plugin-window-state",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

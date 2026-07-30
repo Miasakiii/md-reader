@@ -32,6 +32,9 @@
   --search-highlight: #fce4a0;
   --search-current: #f0a030;
   --toolbar-blur: rgba(250, 249, 247, 0.85);
+  --dialog-primary-bg: #93401f;
+  --dialog-primary-hover: #773116;
+  --dialog-danger: #8b2f26;
 
   /* 排版 */
   --font-sans: "Inter", "SF Pro Text", -apple-system, BlinkMacSystemFont, "Noto Sans SC", "Microsoft YaHei", "Segoe UI", Helvetica, Arial, sans-serif;
@@ -74,6 +77,9 @@
   --search-highlight: #5c4b00;
   --search-current: #b86e00;
   --toolbar-blur: rgba(25, 25, 25, 0.85);
+  --dialog-primary-bg: #a54820;
+  --dialog-primary-hover: #8c3a18;
+  --dialog-danger: #ffaaa0;
 }
 
 [data-theme="sepia"] {
@@ -102,6 +108,9 @@
   --search-highlight: #e8d490;
   --search-current: #d4a030;
   --toolbar-blur: rgba(245, 238, 216, 0.85);
+  --dialog-primary-bg: #8d3b1d;
+  --dialog-primary-hover: #702e15;
+  --dialog-danger: #812b23;
 }
 
 html {

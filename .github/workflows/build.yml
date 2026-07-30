@@ -7,7 +7,73 @@ on:
   workflow_dispatch:
 
 jobs:
+  verify:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Verify tag matches package version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          package_version="$(node -p "require('./package.json').version")"
+          expected_tag="v${package_version}"
+
+          if [[ "$GITHUB_REF_NAME" != "$expected_tag" ]]; then
+            echo "Tag $GITHUB_REF_NAME does not match package.json version $package_version." >&2
+            exit 1
+          fi
+
+          if ! awk -v heading="## [${package_version}]" '
+            $0 == heading || index($0, heading " - ") == 1 { found = 1 }
+            END { exit found ? 0 : 1 }
+          ' CHANGELOG.md; then
+            echo "CHANGELOG.md has no section for version $package_version." >&2
+            exit 1
+          fi
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Test frontend logic
+        run: npm test
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+
+      - name: Test Rust backend
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+
+      - name: Lint Rust backend
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
+
   build:
+    needs: verify
     strategy:
       fail-fast: false
       matrix:
@@ -30,7 +96,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
+          cache: npm
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -49,10 +116,7 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
       - name: Install frontend dependencies
-        run: npm install
-
-      - name: Build frontend
-        run: npm run build
+        run: npm ci
 
       - name: Get version
         id: version
@@ -79,10 +143,13 @@ jobs:
 
           1. 解压后将 MD-Reader-$version-portable.exe 放到任意文件夹
           2. 双击运行，无需安装
-          3. 可将 .md / .txt 文件拖入窗口，或双击 .md / .txt 文件打开
-          4. 阅读进度、窗口大小与最近文件会自动保存
+          3. 可通过打开对话框或拖入窗口读取 .md / .markdown / .txt / .tex / .log；.log 始终只读
+          4. 安装版仅注册 .md / .markdown / .txt 系统文件关联，不接管 .tex / .log；便携版不会自动注册关联
+          5. 阅读进度、窗口大小与最近文件会自动保存
 
-          系统要求：Windows 10/11（需 WebView2 运行时）
+          系统要求：Windows 10/11（需 WebView2 运行时，通常已安装）
+
+          项目主页：https://github.com/Miasakiii/md-reader
           "@ | Set-Content -Path "$releaseDir/使用说明.txt" -Encoding UTF8
 
           Compress-Archive -Path $portableExe, "$releaseDir/使用说明.txt" -DestinationPath "$releaseDir/MD-Reader-$version-portable.zip" -Force
@@ -117,9 +184,18 @@ jobs:
             src-tauri/target/release/bundle/appimage/*.AppImage
 
   release:
-    needs: build
+    needs: [verify, build]
     runs-on: ubuntu-latest
-    if: always() && !cancelled() && startsWith(github.ref, 'refs/tags/v')
+    # The release intentionally tolerates partial macOS/Linux matrix failures.
+    # A failed Windows build produces no run-scoped artifact, so the download
+    # step fails before the GitHub Release action can create a release.
+    if: >-
+      ${{
+        always() &&
+        !cancelled() &&
+        startsWith(github.ref, 'refs/tags/v') &&
+        needs.verify.result == 'success'
+      }}
     permissions:
       contents: write
     steps:
@@ -135,7 +211,14 @@ jobs:
           {
             echo "## MD Reader v${version}"
             echo ""
-            sed -n "/^## \\[${version}\\]/,/^## \\[/p" CHANGELOG.md | head -n -1
+            awk -v heading="## [${version}]" '
+              $0 == heading || index($0, heading " - ") == 1 {
+                in_section = 1
+                next
+              }
+              in_section && /^## \[/ { exit }
+              in_section { print }
+            ' CHANGELOG.md
           } > "release-notes-v${version}.md"
 
       - name: Download Windows assets

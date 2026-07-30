@@ -2,6 +2,37 @@
 
 本文件记录 MD Reader 的重要变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [Unreleased]
+
+### Added
+
+- `.tex` 作为可编辑纯文本打开，保留原文，不执行 TeX 渲染或编译
+- `.log` 作为一次性只读快照打开并支持全文搜索；文件达到或超过 10 MiB 时读取前确认
+- `shared/document-types.json` 作为前端与 Rust 后端共同校验的文档类型策略，统一五种运行时扩展名（`.md`、`.markdown`、`.txt`、`.tex`、`.log`）及其渲染、编辑、目录和大文件能力
+- 文档切换保护：当前内容未保存时可选择“保存并继续 / 放弃修改 / 取消”，取消或保存失败不会读取目标文件
+- JavaScript/Rust 策略、只读、大日志竞态、文件关联与权限契约测试，以及持续集成检查
+
+### Changed
+
+- 打开对话框、浏览器文件选择、拖拽、CLI 和应用内打开事件从共享策略接受五种运行时格式；保存入口只列出可编辑格式并排除 `.log`
+- 系统文件关联刻意维持在 `.md`、`.markdown`、`.txt`，不接管 `.tex` 或 `.log` 的系统默认程序
+- 文件读取、保存与类型判断集中到受校验的后端命令；不支持的类型、目录和符号链接失败关闭
+- 浏览器预览与原生端一致采用严格 UTF-8 优先、GB18030 回退；无法识别的字节不会以替换字符静默打开
+- 原生读取不跟随最终链接；保存改为同目录临时文件完整写入、同步并原子替换，写入或替换失败时保留原文件
+- Node.js 开发基线提升为仍受支持的 22+，CI 使用 Node.js 24 LTS；普通检查和标签发布均使用锁文件、前端测试/构建、Rust 格式检查、测试与 Clippy
+- 标签发布校验 tag、应用版本与 CHANGELOG，并在验证门禁失败时停止发布
+- `package.json`、Cargo 与 Tauri 清单已同步为 1.2.0 候选；在远端 CI 和独立安装验收完成前继续保留为 Unreleased
+- Windows 本地发布脚本从 `package.json` 读取并校验版本，构建失败立即停止，且只打包唯一、版本精确匹配的 NSIS 产物
+
+### Fixed
+
+- 切换浅色、深色和护眼主题时同步 Tauri 原生窗口栏；深色使用原生深色栏，浅色与护眼使用原生浅色栏
+- `npm run tauri dev/build` 现在分别自动启动 Vite 和构建前端，避免漏启开发服务器或打包旧 `dist`
+
+### Removed
+
+- 未使用的 Tauri 前端文件系统插件依赖与全部 `fs:*` capability 权限
+
 ## [1.1.2] - 2026-07-06
 
 ### Added
@@ -53,6 +84,7 @@
 - 轻量级 Markdown 阅读器（Tauri 2）
 - 三种主题、目录导航、全文搜索、轻量编辑、阅读进度与窗口记忆
 
+[Unreleased]: https://github.com/Miasakiii/md-reader/compare/v1.1.2...HEAD
 [1.1.2]: https://github.com/Miasakiii/md-reader/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/Miasakiii/md-reader/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/Miasakiii/md-reader/compare/v1.0.0...v1.1.0
