@@ -336,6 +336,12 @@ impl OpenFileQueue {
 /// 启动时传入、或在前端事件监听器就绪前收到的文件路径。
 struct CliArgs(Mutex<OpenFileQueue>);
 
+#[cfg(any(test, target_os = "macos", target_os = "ios", target_os = "android"))]
+fn queue_or_emit_open_file(cli_args: &CliArgs, path: String) -> Option<String> {
+    let mut queue = cli_args.0.lock().unwrap();
+    queue.queue_or_emit(path)
+}
+
 fn is_openable_document_path(path: &Path) -> bool {
     file_types::is_supported_document_path(path)
         && fs::symlink_metadata(path)
@@ -435,7 +441,7 @@ fn main() {
                         if is_openable_document_path(&path) {
                             let path_to_emit = {
                                 let cli_args = _app.state::<CliArgs>();
-                                cli_args.0.lock().unwrap().queue_or_emit(p)
+                                queue_or_emit_open_file(&cli_args, p)
                             };
                             if let Some(path_to_emit) = path_to_emit {
                                 emit_file_opened(_app, path_to_emit);
@@ -821,5 +827,25 @@ mod tests {
         assert!(queue.take_pending_and_mark_ready().is_empty());
         assert_eq!(queue.queue_or_emit(after_ready.clone()), Some(after_ready));
         assert!(queue.pending.is_empty());
+    }
+
+    #[test]
+    fn cli_args_queue_access_returns_an_owned_path_after_frontend_is_ready() {
+        let cli_args = CliArgs(Mutex::new(OpenFileQueue::new(Vec::new())));
+        let before_ready = "before-ready.log".to_string();
+        let after_ready = "after-ready.tex".to_string();
+
+        assert_eq!(
+            queue_or_emit_open_file(&cli_args, before_ready.clone()),
+            None
+        );
+        assert_eq!(
+            cli_args.0.lock().unwrap().take_pending_and_mark_ready(),
+            vec![before_ready]
+        );
+        assert_eq!(
+            queue_or_emit_open_file(&cli_args, after_ready.clone()),
+            Some(after_ready)
+        );
     }
 }
