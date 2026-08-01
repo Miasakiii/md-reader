@@ -1,27 +1,44 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod file_types;
+mod safe_file;
+
+use file_types::{BackendError, DocumentKind, DocumentType, RenderMode};
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::{ErrorKind, Read};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use tauri::{Emitter, Manager, RunEvent, WebviewEvent};
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
+use tauri::{Emitter, Manager};
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 struct FileData {
     path: String,
     content: String,
     encoding: String,
+    kind: DocumentKind,
+    render_mode: RenderMode,
+    read_only: bool,
+    size_bytes: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct DocumentInspection {
+    path: String,
+    kind: DocumentKind,
+    render_mode: RenderMode,
+    read_only: bool,
+    size_bytes: u64,
+    requires_large_file_confirmation: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 struct ReadingProgress {
     scroll_top: f64,
     scroll_pct: f64,
-}
-
-#[derive(Serialize, Deserialize, Clone, Default)]
-struct AppState {
-    recent_files: Vec<String>,
 }
 
 /// 获取配置目录
@@ -33,37 +50,195 @@ fn config_dir() -> PathBuf {
     dir
 }
 
-/// 读取文件内容（UTF-8 优先，失败时尝试 GB18030/GBK）
+fn metadata_error(path: &Path, error: std::io::Error) -> BackendError {
+    if error.kind() == ErrorKind::NotFound {
+        BackendError::new("missing_file", format!("文件不存在: {}", path.display()))
+    } else {
+        BackendError::new(
+            "metadata_failed",
+            format!("无法读取文件元数据 {}: {error}", path.display()),
+        )
+    }
+}
+
+fn inspect_document_path(path: &Path) -> Result<(DocumentType, fs::Metadata), BackendError> {
+    let document_type = file_types::classify_path(path)?;
+    let metadata = fs::symlink_metadata(path).map_err(|error| metadata_error(path, error))?;
+
+    if !metadata.file_type().is_file() {
+        return Err(BackendError::new(
+            "not_regular_file",
+            format!("路径不是普通文件: {}", path.display()),
+        ));
+    }
+
+    Ok((document_type, metadata))
+}
+
+/// 无副作用地检查文档类型、文件状态和大日志预警条件。
 #[tauri::command]
-fn read_file(path: String) -> Result<FileData, String> {
-    let bytes = fs::read(&path).map_err(|e| format!("读取文件失败: {}", e))?;
+fn inspect_document(path: String) -> Result<DocumentInspection, BackendError> {
+    let (document_type, metadata) = inspect_document_path(Path::new(&path))?;
+    let size_bytes = metadata.len();
+    let requires_large_file_confirmation = document_type.warn_when_large
+        && size_bytes >= file_types::policy()?.large_log_warning_bytes();
 
-    if let Ok(content) = std::str::from_utf8(&bytes) {
-        save_recent_file(&path);
-        return Ok(FileData {
-            path,
-            content: content.to_string(),
-            encoding: "UTF-8".to_string(),
-        });
+    Ok(DocumentInspection {
+        path,
+        kind: document_type.kind,
+        render_mode: document_type.render_mode,
+        read_only: !document_type.can_save(),
+        size_bytes,
+        requires_large_file_confirmation,
+    })
+}
+
+fn large_log_confirmation_error() -> BackendError {
+    BackendError::new(
+        "large_log_confirmation_required",
+        "日志文件较大，读取前需要用户确认",
+    )
+}
+
+fn read_document_bytes<R: Read>(
+    reader: &mut R,
+    unconfirmed_log_threshold: Option<u64>,
+    path: &str,
+) -> Result<Vec<u8>, BackendError> {
+    let mut bytes = Vec::new();
+    if let Some(threshold) = unconfirmed_log_threshold {
+        reader
+            .take(threshold)
+            .read_to_end(&mut bytes)
+            .map_err(|error| {
+                BackendError::new("read_failed", format!("读取文件失败 {path}: {error}"))
+            })?;
+        if bytes.len() as u64 >= threshold {
+            return Err(large_log_confirmation_error());
+        }
+    } else {
+        reader.read_to_end(&mut bytes).map_err(|error| {
+            BackendError::new("read_failed", format!("读取文件失败 {path}: {error}"))
+        })?;
+    }
+    Ok(bytes)
+}
+
+fn read_document(path: String, allow_large_log: bool) -> Result<FileData, BackendError> {
+    let target = Path::new(&path);
+    let document_type = file_types::classify_path(target)?;
+    let (mut file, metadata) =
+        safe_file::open_regular_for_read(target).map_err(|error| match error {
+            safe_file::OpenRegularFileError::Open(error) if error.kind() == ErrorKind::NotFound => {
+                BackendError::new("missing_file", format!("文件不存在: {path}"))
+            }
+            safe_file::OpenRegularFileError::Open(error) => {
+                BackendError::new("read_failed", format!("打开文件失败 {path}: {error}"))
+            }
+            safe_file::OpenRegularFileError::Metadata(error) => BackendError::new(
+                "metadata_failed",
+                format!("无法读取已打开文件的元数据 {path}: {error}"),
+            ),
+            safe_file::OpenRegularFileError::NotRegular => BackendError::new(
+                "not_regular_file",
+                format!("已打开的路径不是普通文件: {path}"),
+            ),
+        })?;
+    let unconfirmed_log_threshold = if document_type.warn_when_large && !allow_large_log {
+        Some(file_types::policy()?.large_log_warning_bytes())
+    } else {
+        None
+    };
+    if unconfirmed_log_threshold.is_some_and(|threshold| metadata.len() >= threshold) {
+        return Err(large_log_confirmation_error());
     }
 
-    let (content, _, had_errors) = encoding_rs::GB18030.decode(&bytes);
-    if had_errors {
-        return Err("无法识别文件编码（非 UTF-8 或 GBK/GB18030）".to_string());
-    }
+    // Unconfirmed logs are read through a hard cap as well as a metadata check.
+    // This closes the race where an actively appended log crosses the warning
+    // threshold after the file handle was opened.
+    let bytes = read_document_bytes(&mut file, unconfirmed_log_threshold, &path)?;
+    let size_bytes = bytes.len() as u64;
 
-    save_recent_file(&path);
+    let (content, encoding) = if let Ok(content) = std::str::from_utf8(&bytes) {
+        (content.to_string(), "UTF-8".to_string())
+    } else {
+        let (content, _, had_errors) = encoding_rs::GB18030.decode(&bytes);
+        if had_errors {
+            return Err(BackendError::new(
+                "decode_failed",
+                "无法识别文件编码（非 UTF-8 或 GBK/GB18030）",
+            ));
+        }
+        (content.into_owned(), "GB18030".to_string())
+    };
+
     Ok(FileData {
         path,
-        content: content.into_owned(),
-        encoding: "GB18030".to_string(),
+        content,
+        encoding,
+        kind: document_type.kind,
+        render_mode: document_type.render_mode,
+        read_only: !document_type.can_save(),
+        size_bytes,
     })
+}
+
+fn read_file_with_registration<F>(
+    path: String,
+    allow_large_log: bool,
+    register_recent: F,
+) -> Result<FileData, BackendError>
+where
+    F: FnOnce(&str),
+{
+    let data = read_document(path, allow_large_log)?;
+    register_recent(&data.path);
+    Ok(data)
+}
+
+/// 读取文件内容（UTF-8 优先，失败时尝试 GB18030/GBK）。
+#[tauri::command]
+fn read_file(path: String, allow_large_log: bool) -> Result<FileData, BackendError> {
+    read_file_with_registration(path, allow_large_log, save_recent_file)
 }
 
 /// 保存文件内容
 #[tauri::command]
-fn save_file(path: String, content: String) -> Result<(), String> {
-    fs::write(&path, content).map_err(|e| format!("保存文件失败: {}", e))?;
+fn save_file(path: String, content: String) -> Result<(), BackendError> {
+    let target = Path::new(&path);
+    let document_type = file_types::classify_path(target)?;
+    if document_type.kind == DocumentKind::Log || !document_type.can_save() {
+        return Err(BackendError::new(
+            "readonly_file",
+            "LOG 文件以只读模式打开，不能保存",
+        ));
+    }
+
+    let existing_permissions = match fs::symlink_metadata(target) {
+        Ok(metadata) if !metadata.file_type().is_file() => {
+            return Err(BackendError::new(
+                "not_regular_file",
+                format!("保存目标不是普通文件: {}", target.display()),
+            ));
+        }
+        Ok(metadata) => Some(metadata.permissions()),
+        Err(error) if error.kind() == ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(BackendError::new(
+                "metadata_failed",
+                format!("无法读取保存目标元数据 {}: {error}", target.display()),
+            ));
+        }
+    };
+
+    safe_file::atomic_replace_contents(target, content.as_bytes(), existing_permissions).map_err(
+        |error| {
+            BackendError::new(
+                "save_failed",
+                format!("保存文件失败 {}: {error}", target.display()),
+            )
+        },
+    )?;
     Ok(())
 }
 
@@ -71,15 +246,20 @@ fn save_file(path: String, content: String) -> Result<(), String> {
 #[tauri::command]
 fn save_reading_progress(path: String, scroll_pct: f64) -> Result<(), String> {
     let progress_file = config_dir().join("progress.json");
-    let mut map: std::collections::HashMap<String, ReadingProgress> =
-        if progress_file.exists() {
-            serde_json::from_str(&fs::read_to_string(&progress_file).unwrap_or_default())
-                .unwrap_or_default()
-        } else {
-            std::collections::HashMap::new()
-        };
+    let mut map: std::collections::HashMap<String, ReadingProgress> = if progress_file.exists() {
+        serde_json::from_str(&fs::read_to_string(&progress_file).unwrap_or_default())
+            .unwrap_or_default()
+    } else {
+        std::collections::HashMap::new()
+    };
 
-    map.insert(path, ReadingProgress { scroll_top: 0.0, scroll_pct });
+    map.insert(
+        path,
+        ReadingProgress {
+            scroll_top: 0.0,
+            scroll_pct,
+        },
+    );
 
     let json = serde_json::to_string_pretty(&map).unwrap_or_default();
     fs::write(&progress_file, json).map_err(|e| format!("保存进度失败: {}", e))?;
@@ -100,10 +280,9 @@ fn load_reading_progress(path: String) -> ReadingProgress {
 }
 
 /// 保存最近文件列表
-fn save_recent_file(path: &str) {
-    let recent_file = config_dir().join("recent.json");
+fn save_recent_file_at(recent_file: &Path, path: &str) -> Result<(), std::io::Error> {
     let mut list: Vec<String> = if recent_file.exists() {
-        serde_json::from_str(&fs::read_to_string(&recent_file).unwrap_or_default())
+        serde_json::from_str(&fs::read_to_string(recent_file).unwrap_or_default())
             .unwrap_or_default()
     } else {
         Vec::new()
@@ -114,16 +293,54 @@ fn save_recent_file(path: &str) {
     list.insert(0, path.to_string());
     list.truncate(20); // 最多保留 20 个
 
-    let json = serde_json::to_string_pretty(&list).unwrap_or_default();
-    fs::write(&recent_file, json).ok();
+    let json = serde_json::to_string_pretty(&list)
+        .map_err(|error| std::io::Error::new(ErrorKind::InvalidData, error))?;
+    fs::write(recent_file, json)
 }
 
-/// 启动时传入的文件路径（CLI 参数 / 文件关联）
-struct CliArgs(Mutex<Vec<String>>);
+fn save_recent_file(path: &str) {
+    let recent_file = config_dir().join("recent.json");
+    let _ = save_recent_file_at(&recent_file, path);
+}
 
-fn is_supported_file(path: &str) -> bool {
-    let lower = path.to_lowercase();
-    lower.ends_with(".md") || lower.ends_with(".markdown") || lower.ends_with(".txt")
+#[derive(Debug)]
+struct OpenFileQueue {
+    pending: Vec<String>,
+    frontend_ready: bool,
+}
+
+impl OpenFileQueue {
+    fn new(pending: Vec<String>) -> Self {
+        Self {
+            pending,
+            frontend_ready: false,
+        }
+    }
+
+    fn take_pending_and_mark_ready(&mut self) -> Vec<String> {
+        self.frontend_ready = true;
+        std::mem::take(&mut self.pending)
+    }
+
+    #[cfg(any(test, target_os = "macos", target_os = "ios", target_os = "android"))]
+    fn queue_or_emit(&mut self, path: String) -> Option<String> {
+        if self.frontend_ready {
+            Some(path)
+        } else {
+            self.pending.push(path);
+            None
+        }
+    }
+}
+
+/// 启动时传入、或在前端事件监听器就绪前收到的文件路径。
+struct CliArgs(Mutex<OpenFileQueue>);
+
+fn is_openable_document_path(path: &Path) -> bool {
+    file_types::is_supported_document_path(path)
+        && fs::symlink_metadata(path)
+            .map(|metadata| metadata.file_type().is_file())
+            .unwrap_or(false)
 }
 
 fn normalize_file_path(raw: &str) -> String {
@@ -140,22 +357,30 @@ fn normalize_file_path(raw: &str) -> String {
     path
 }
 
-fn collect_cli_file_args() -> Vec<String> {
+fn collect_file_args<I>(args: I) -> Vec<String>
+where
+    I: IntoIterator<Item = String>,
+{
     let mut files = Vec::new();
-    for maybe_file in std::env::args().skip(1) {
+    for maybe_file in args {
         if maybe_file.starts_with('-') {
             continue;
         }
         let path = normalize_file_path(&maybe_file);
-        if is_supported_file(&path) && Path::new(&path).is_file() {
+        if is_openable_document_path(Path::new(&path)) {
             files.push(path);
         }
     }
     files
 }
 
+fn collect_cli_file_args() -> Vec<String> {
+    collect_file_args(std::env::args().skip(1))
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
 fn emit_file_opened(app: &tauri::AppHandle, path: String) {
-    if !is_supported_file(&path) {
+    if !is_openable_document_path(Path::new(&path)) {
         return;
     }
     if let Some(window) = app.get_webview_window("main") {
@@ -166,7 +391,7 @@ fn emit_file_opened(app: &tauri::AppHandle, path: String) {
 /// 获取启动时传入的文件路径
 #[tauri::command]
 fn get_cli_args(state: tauri::State<CliArgs>) -> Vec<String> {
-    state.0.lock().unwrap().clone()
+    state.0.lock().unwrap().take_pending_and_mark_ready()
 }
 
 /// 获取最近文件列表
@@ -176,23 +401,22 @@ fn get_recent_files() -> Vec<String> {
     if !recent_file.exists() {
         return Vec::new();
     }
-    serde_json::from_str(&fs::read_to_string(&recent_file).unwrap_or_default())
-        .unwrap_or_default()
+    serde_json::from_str(&fs::read_to_string(&recent_file).unwrap_or_default()).unwrap_or_default()
 }
 
 fn main() {
     let initial_args = collect_cli_file_args();
 
     tauri::Builder::default()
-        .manage(CliArgs(Mutex::new(initial_args)))
+        .manage(CliArgs(Mutex::new(OpenFileQueue::new(initial_args))))
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init())
         .plugin(
             tauri_plugin_window_state::Builder::new()
                 .with_filename("window-state.json")
                 .build(),
         )
         .invoke_handler(tauri::generate_handler![
+            inspect_document,
             read_file,
             save_file,
             save_reading_progress,
@@ -202,33 +426,400 @@ fn main() {
         ])
         .build(tauri::generate_context!())
         .expect("failed to run MD Reader")
-        .run(|app, event| {
-            match event {
-                #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
-                RunEvent::Opened { urls } => {
-                    let cli_args = app.state::<CliArgs>();
-                    let mut args = cli_args.0.lock().unwrap();
-                    for url in urls {
-                        if let Ok(path) = url.to_file_path() {
-                            let p = path.to_string_lossy().to_string();
-                            if is_supported_file(&p) {
-                                args.push(p.clone());
-                                emit_file_opened(app, p);
+        .run(|_app, event| match event {
+            #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
+            tauri::RunEvent::Opened { urls } => {
+                for url in urls {
+                    if let Ok(path) = url.to_file_path() {
+                        let p = path.to_string_lossy().to_string();
+                        if is_openable_document_path(&path) {
+                            let path_to_emit = {
+                                let cli_args = _app.state::<CliArgs>();
+                                cli_args.0.lock().unwrap().queue_or_emit(p)
+                            };
+                            if let Some(path_to_emit) = path_to_emit {
+                                emit_file_opened(_app, path_to_emit);
                             }
                         }
                     }
                 }
-                RunEvent::WebviewEvent { label, event, .. } if label == "main" => {
-                    if let WebviewEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
-                        for path in paths {
-                            let p = path.to_string_lossy().to_string();
-                            if is_supported_file(&p) {
-                                emit_file_opened(app, p);
-                            }
-                        }
-                    }
-                }
-                _ => {}
             }
+            _ => {}
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static TEMP_DIRECTORY_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    struct TestDirectory {
+        path: PathBuf,
+    }
+
+    impl TestDirectory {
+        fn new(label: &str) -> Self {
+            let counter = TEMP_DIRECTORY_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let nonce = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time should be after the epoch")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "md-reader-{label}-{}-{nonce}-{counter}",
+                std::process::id()
+            ));
+            fs::create_dir(&path).expect("unique test directory should be created");
+            Self { path }
+        }
+
+        fn path(&self, name: &str) -> PathBuf {
+            self.path.join(name)
+        }
+    }
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn path_string(path: &Path) -> String {
+        path.to_string_lossy().into_owned()
+    }
+
+    fn read_recent_file(path: &Path) -> Vec<String> {
+        serde_json::from_str(&fs::read_to_string(path).expect("recent file should exist"))
+            .expect("recent file should contain valid JSON")
+    }
+
+    fn read_with_test_recent(
+        path: &Path,
+        allow_large_log: bool,
+        recent_file: &Path,
+    ) -> Result<FileData, BackendError> {
+        read_file_with_registration(path_string(path), allow_large_log, |opened_path| {
+            save_recent_file_at(recent_file, opened_path).expect("test recent file should save");
+        })
+    }
+
+    #[test]
+    fn inspection_distinguishes_missing_directory_regular_and_unsupported_paths() {
+        let directory = TestDirectory::new("inspection");
+
+        let missing = directory.path("missing.md");
+        assert_eq!(
+            inspect_document(path_string(&missing)).unwrap_err().code,
+            "missing_file"
+        );
+
+        let non_file = directory.path("folder.tex");
+        fs::create_dir(&non_file).unwrap();
+        assert_eq!(
+            inspect_document(path_string(&non_file)).unwrap_err().code,
+            "not_regular_file"
+        );
+
+        let unsupported = directory.path("image.png");
+        fs::write(&unsupported, b"not a document").unwrap();
+        assert_eq!(
+            inspect_document(path_string(&unsupported))
+                .unwrap_err()
+                .code,
+            "unsupported_type"
+        );
+
+        let regular = directory.path("paper.TeX");
+        fs::write(&regular, "\\section{Intro}").unwrap();
+        let inspection = inspect_document(path_string(&regular)).unwrap();
+        assert_eq!(inspection.kind, DocumentKind::Text);
+        assert_eq!(inspection.render_mode, RenderMode::Plain);
+        assert!(!inspection.read_only);
+        assert_eq!(inspection.size_bytes, 15);
+        assert!(!inspection.requires_large_file_confirmation);
+
+        let serialized = serde_json::to_value(inspection).unwrap();
+        assert_eq!(serialized["renderMode"], "plain");
+        assert_eq!(serialized["readOnly"], false);
+        assert_eq!(serialized["sizeBytes"], 15);
+        assert!(serialized.get("requiresLargeFileConfirmation").is_some());
+        assert!(serialized.get("render_mode").is_none());
+    }
+
+    #[test]
+    fn non_not_found_metadata_errors_have_a_stable_code() {
+        let error = metadata_error(
+            Path::new("denied.md"),
+            std::io::Error::new(ErrorKind::PermissionDenied, "denied by fixture"),
+        );
+        assert_eq!(error.code, "metadata_failed");
+        assert!(error.message.contains("denied.md"));
+    }
+
+    #[test]
+    fn large_log_warning_includes_equal_threshold_boundary() {
+        let directory = TestDirectory::new("log-boundary");
+        let threshold = file_types::policy().unwrap().large_log_warning_bytes();
+
+        for (name, size, expected_warning) in [
+            ("below.log", threshold - 1, false),
+            ("equal.log", threshold, true),
+            ("above.log", threshold + 1, true),
+        ] {
+            let path = directory.path(name);
+            fs::File::create(&path).unwrap().set_len(size).unwrap();
+            let inspection = inspect_document(path_string(&path)).unwrap();
+            assert_eq!(inspection.size_bytes, size);
+            assert_eq!(
+                inspection.requires_large_file_confirmation, expected_warning,
+                "size: {size}"
+            );
+        }
+    }
+
+    #[test]
+    fn unconfirmed_large_log_is_not_read_or_registered() {
+        let directory = TestDirectory::new("unconfirmed-log");
+        let recent_file = directory.path("recent.json");
+        save_recent_file_at(&recent_file, "sentinel.md").unwrap();
+        let recent_before = fs::read(&recent_file).unwrap();
+
+        let log = directory.path("large.log");
+        fs::File::create(&log)
+            .unwrap()
+            .set_len(file_types::policy().unwrap().large_log_warning_bytes())
+            .unwrap();
+
+        let error = read_with_test_recent(&log, false, &recent_file).unwrap_err();
+        assert_eq!(error.code, "large_log_confirmation_required");
+        assert_eq!(fs::read(&recent_file).unwrap(), recent_before);
+    }
+
+    #[test]
+    fn log_growth_after_inspection_is_rechecked_before_reading() {
+        let directory = TestDirectory::new("growing-log");
+        let recent_file = directory.path("recent.json");
+        save_recent_file_at(&recent_file, "sentinel.md").unwrap();
+        let recent_before = fs::read(&recent_file).unwrap();
+        let log = directory.path("growing.log");
+        fs::write(&log, b"initial").unwrap();
+
+        let inspection = inspect_document(path_string(&log)).unwrap();
+        assert!(!inspection.requires_large_file_confirmation);
+
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&log)
+            .unwrap()
+            .set_len(file_types::policy().unwrap().large_log_warning_bytes())
+            .unwrap();
+        let error = read_with_test_recent(&log, false, &recent_file).unwrap_err();
+        assert_eq!(error.code, "large_log_confirmation_required");
+        assert_eq!(fs::read(&recent_file).unwrap(), recent_before);
+    }
+
+    #[test]
+    fn unconfirmed_log_stream_stops_at_the_warning_boundary() {
+        let mut below = Cursor::new(b"1234567".to_vec());
+        assert_eq!(
+            read_document_bytes(&mut below, Some(8), "below.log").unwrap(),
+            b"1234567"
+        );
+
+        let mut growing = Cursor::new(b"1234567890".to_vec());
+        let error = read_document_bytes(&mut growing, Some(8), "growing.log").unwrap_err();
+        assert_eq!(error.code, "large_log_confirmation_required");
+        assert_eq!(
+            growing.position(),
+            8,
+            "the unconfirmed read must stay bounded"
+        );
+    }
+
+    #[test]
+    fn tex_reading_supports_utf8_and_gb18030_and_returns_document_capabilities() {
+        let directory = TestDirectory::new("tex-decode");
+        let recent_file = directory.path("recent.json");
+
+        let utf8 = directory.path("utf8.tex");
+        let utf8_content = "\\section{你好}\r\n\r\n  indented\n\\command{value}";
+        fs::write(&utf8, utf8_content.as_bytes()).unwrap();
+        let utf8_data = read_with_test_recent(&utf8, false, &recent_file).unwrap();
+        assert_eq!(utf8_data.content, utf8_content);
+        assert_eq!(utf8_data.encoding, "UTF-8");
+        assert_eq!(utf8_data.kind, DocumentKind::Text);
+        assert_eq!(utf8_data.render_mode, RenderMode::Plain);
+        assert!(!utf8_data.read_only);
+        assert_eq!(utf8_data.size_bytes, utf8_content.len() as u64);
+
+        let gb18030 = directory.path("gb18030.TeX");
+        fs::write(&gb18030, [0xD6, 0xD0, 0xCE, 0xC4]).unwrap();
+        let gb18030_data = read_with_test_recent(&gb18030, false, &recent_file).unwrap();
+        assert_eq!(gb18030_data.content, "中文");
+        assert_eq!(gb18030_data.encoding, "GB18030");
+
+        assert_eq!(
+            read_recent_file(&recent_file),
+            vec![path_string(&gb18030), path_string(&utf8)]
+        );
+    }
+
+    #[test]
+    fn failed_decode_does_not_change_recent_files() {
+        let directory = TestDirectory::new("decode-failure");
+        let recent_file = directory.path("recent.json");
+        save_recent_file_at(&recent_file, "sentinel.md").unwrap();
+        let recent_before = fs::read(&recent_file).unwrap();
+
+        let invalid = directory.path("invalid.tex");
+        fs::write(&invalid, [0x81]).unwrap();
+        let error = read_with_test_recent(&invalid, false, &recent_file).unwrap_err();
+        assert_eq!(error.code, "decode_failed");
+        assert_eq!(fs::read(&recent_file).unwrap(), recent_before);
+
+        let missing = directory.path("missing.tex");
+        let error = read_with_test_recent(&missing, false, &recent_file).unwrap_err();
+        assert_eq!(error.code, "missing_file");
+        assert_eq!(fs::read(&recent_file).unwrap(), recent_before);
+    }
+
+    #[test]
+    fn saving_tex_writes_utf8_and_rejects_log_without_modifying_it() {
+        let directory = TestDirectory::new("save-policy");
+
+        let tex = directory.path("paper.tex");
+        fs::write(&tex, b"old content").unwrap();
+        let content = "\\section{保存}\r\n\r\n  正文\n\\end{document}";
+        save_file(path_string(&tex), content.to_string()).unwrap();
+        assert_eq!(fs::read(&tex).unwrap(), content.as_bytes());
+        assert_eq!(
+            std::str::from_utf8(&fs::read(&tex).unwrap()).unwrap(),
+            content
+        );
+
+        let new_tex = directory.path("new.tex");
+        save_file(path_string(&new_tex), "新文件".to_string()).unwrap();
+        assert_eq!(fs::read(&new_tex).unwrap(), "新文件".as_bytes());
+
+        let log = directory.path("build.log");
+        fs::write(&log, b"original log").unwrap();
+        let modified_before = fs::metadata(&log).unwrap().modified().unwrap();
+        let error = save_file(path_string(&log), "replacement".to_string()).unwrap_err();
+        assert_eq!(error.code, "readonly_file");
+        assert_eq!(fs::read(&log).unwrap(), b"original log");
+        assert_eq!(
+            fs::metadata(&log).unwrap().modified().unwrap(),
+            modified_before
+        );
+
+        let unsupported = directory.path("notes.json");
+        fs::write(&unsupported, b"original json").unwrap();
+        let unsupported_modified_before = fs::metadata(&unsupported).unwrap().modified().unwrap();
+        let error = save_file(path_string(&unsupported), "{}".to_string()).unwrap_err();
+        assert_eq!(error.code, "unsupported_type");
+        assert_eq!(fs::read(&unsupported).unwrap(), b"original json");
+        assert_eq!(
+            fs::metadata(&unsupported).unwrap().modified().unwrap(),
+            unsupported_modified_before
+        );
+    }
+
+    #[test]
+    fn save_rejects_existing_non_regular_targets() {
+        let directory = TestDirectory::new("save-special");
+        let target_directory = directory.path("directory.tex");
+        fs::create_dir(&target_directory).unwrap();
+
+        let error = save_file(path_string(&target_directory), "content".to_string()).unwrap_err();
+        assert_eq!(error.code, "not_regular_file");
+        assert!(target_directory.is_dir());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reads_and_saves_reject_existing_symbolic_links() {
+        use std::os::unix::fs::symlink;
+
+        let directory = TestDirectory::new("symlink");
+        let target = directory.path("target.tex");
+        let link = directory.path("link.tex");
+        fs::write(&target, b"original").unwrap();
+        symlink(&target, &link).unwrap();
+
+        assert_eq!(
+            inspect_document(path_string(&link)).unwrap_err().code,
+            "not_regular_file"
+        );
+        assert_eq!(
+            save_file(path_string(&link), "replacement".to_string())
+                .unwrap_err()
+                .code,
+            "not_regular_file"
+        );
+        assert_eq!(fs::read(&target).unwrap(), b"original");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_rejects_existing_special_files() {
+        use std::os::unix::net::UnixListener;
+
+        let directory = TestDirectory::new("special-file");
+        let socket = directory.path("socket.tex");
+        let _listener = UnixListener::bind(&socket).unwrap();
+
+        let error = save_file(path_string(&socket), "replacement".to_string()).unwrap_err();
+        assert_eq!(error.code, "not_regular_file");
+        assert!(!fs::symlink_metadata(&socket).unwrap().file_type().is_file());
+    }
+
+    #[test]
+    fn cli_filter_uses_shared_policy_and_requires_regular_files() {
+        let directory = TestDirectory::new("cli-filter");
+        let tex = directory.path("paper.TeX");
+        let log = directory.path("build.LOG");
+        let markdown = directory.path("README.md");
+        let unsupported = directory.path("image.png");
+        let fake_file = directory.path("folder.log");
+        fs::write(&tex, b"tex").unwrap();
+        fs::write(&log, b"log").unwrap();
+        fs::write(&markdown, b"markdown").unwrap();
+        fs::write(&unsupported, b"png").unwrap();
+        fs::create_dir(&fake_file).unwrap();
+
+        let accepted = collect_file_args(vec![
+            "--ignored-option".to_string(),
+            path_string(&tex),
+            path_string(&log),
+            path_string(&markdown),
+            path_string(&unsupported),
+            path_string(&fake_file),
+            path_string(&directory.path("missing.txt")),
+        ]);
+
+        assert_eq!(
+            accepted,
+            vec![path_string(&tex), path_string(&log), path_string(&markdown)]
+        );
+    }
+
+    #[test]
+    fn open_file_queue_delivers_each_path_through_exactly_one_channel() {
+        let startup = "startup.tex".to_string();
+        let before_ready = "before-ready.log".to_string();
+        let after_ready = "after-ready.md".to_string();
+        let mut queue = OpenFileQueue::new(vec![startup.clone()]);
+
+        assert_eq!(queue.queue_or_emit(before_ready.clone()), None);
+        assert_eq!(
+            queue.take_pending_and_mark_ready(),
+            vec![startup, before_ready]
+        );
+        assert!(queue.take_pending_and_mark_ready().is_empty());
+        assert_eq!(queue.queue_or_emit(after_ready.clone()), Some(after_ready));
+        assert!(queue.pending.is_empty());
+    }
 }

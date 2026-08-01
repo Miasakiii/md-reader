@@ -1,8 +1,10 @@
 # 📖 MD Reader
 
-轻量级 Markdown 阅读器 — 主打阅读体验和快速启动。
+轻量级 Markdown 与纯文本文档阅读器 — 主打阅读体验和快速启动。
 
-**当前版本：1.1.2**
+**最新已发布版本：v1.1.2**
+
+**当前源码状态：v1.2.0 候选（Unreleased）** — 包含尚未随 v1.1.2 发布的开发中功能；下方特性与开发说明以当前工作树为准，已发布能力见[更新记录](#-更新记录)。
 
 ## ✨ 特性
 
@@ -10,43 +12,45 @@
 - 🎨 **三种主题** — 浅色 / 深色 / 护眼（Sepia），工具栏图标随主题三态切换
 - 📖 **优雅排版** — 衬线体正文、无衬线标题、精心调校行距字距
 - 📑 **目录导航** — 自动生成 TOC，滚动高亮当前章节
-- 🔍 **全文搜索** — 实时高亮段落内所有匹配项，支持逐个定位
-- ✏️ **轻量编辑** — 分屏实时预览
-- 📂 **拖拽打开** — 直接拖入 .md / .txt 文件（`dragDropEnabled`）
+- 🔍 **全文搜索** — Markdown、纯文本和只读日志均可搜索，实时高亮并逐个定位
+- ✏️ **轻量编辑** — `.md` / `.markdown` 分屏预览，`.txt` / `.tex` 纯文本编辑
+- 📂 **多入口打开** — 对话框、拖拽、CLI 与应用内打开事件支持 `.md` / `.markdown` / `.txt` / `.tex` / `.log`
 - 💾 **阅读进度** — 自动保存/恢复每个文件的滚动位置
 - 🪟 **窗口记忆** — 自动记住窗口大小和位置
 - 📌 **最近文件** — 欢迎页展示最近 8 个文件，点击即可重新打开
-- 📋 **文件关联** — 双击 .md / .txt 直接打开（Windows 经 CLI 参数，macOS/iOS/Android 经 `file-opened` 事件）
-- 📄 **纯文本** — 支持 .txt 阅读与编辑，保留换行；自动识别 UTF-8 / GBK 编码
+- 📋 **系统文件关联** — 安装包仅注册 `.md` / `.markdown` / `.txt`；`.tex` / `.log` 不接管系统默认程序
+- 📄 **纯文本与 TeX 源码** — `.txt` / `.tex` 按原文显示和编辑，不执行 TeX 渲染或编译；自动识别 UTF-8 / GB18030/GBK
+- 🧾 **日志快照** — `.log` 一次性完整读取、只读展示并支持搜索；文件达到 10 MiB 时先确认
+- 🛡️ **切换保护** — 有未保存修改时，打开另一文档前可保存、放弃或取消
 - 🔒 **安全渲染** — DOMPurify 过滤 Markdown HTML 输出，CSP 限制资源加载
-- 🪶 **极致轻量** — 前端 gzip < 100KB，安装包 ~8MB
+- 🪶 **极致轻量** — 前端 gzip 约 115KB，安装包 ~8MB
 - 📦 **便携版** — Windows 单 exe 免安装
 
 ## 🚀 快速开始
 
 ### 环境要求
 
-- [Node.js](https://nodejs.org/) >= 18
-- [Rust](https://rustup.rs/) >= 1.70
+- [Node.js](https://nodejs.org/) >= 22（CI 使用 Node.js 24 LTS）
+- [Rust](https://rustup.rs/) stable 工具链
 - 系统依赖：
-  - **Windows**: WebView2（Win10/11 自带）
+  - **Windows**: WebView2（Windows 10/11 通常已安装）
   - **macOS**: 系统 WebKit（自带）
-  - **Linux**: `sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev`
+  - **Linux**: `sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf`
 
 ### 安装 & 运行
 
 ```bash
-# 安装依赖
-npm install
+# 按锁文件安装依赖
+npm ci
 
-# 开发模式（热重载）
+# 桌面开发模式（Tauri 通过 beforeDevCommand 自动启动 Vite）
 npm run tauri dev
 
-# 构建发布版
+# 构建发布版（Tauri 通过 beforeBuildCommand 自动构建前端）
 npm run tauri build
 
 # 仅构建 Windows MSI（简体中文 WiX 语言包，见 src-tauri/wix/zh-CN.wxl）
-npm run build && npm run tauri build -- --bundles msi
+npm run tauri build -- --bundles msi
 ```
 
 ### 仅前端（浏览器预览）
@@ -55,6 +59,22 @@ npm run build && npm run tauri build -- --bundles msi
 npm run dev
 # 访问 http://localhost:1420
 ```
+
+### 支持格式与打开入口
+
+运行时格式统一由 `shared/document-types.json` 定义，扩展名比较不区分大小写。
+
+| 入口 / 操作 | 支持格式 | 说明 |
+|---|---|---|
+| 桌面打开对话框、拖拽 | `.md` `.markdown` `.txt` `.tex` `.log` | 成功读取后进入最近文件 |
+| 浏览器预览文件选择 | `.md` `.markdown` `.txt` `.tex` `.log` | 仅本次预览，不写桌面端最近文件 |
+| CLI 参数、应用内 `file-opened` 事件 | `.md` `.markdown` `.txt` `.tex` `.log` | 仍经过后端类型与普通文件校验 |
+| 系统双击文件关联 | `.md` `.markdown` `.txt` | 安装包不会注册 `.tex` 或 `.log` |
+| 保存 / 另存为 | `.md` `.markdown` `.txt` `.tex` | `.log` 始终只读，不出现在保存格式中 |
+
+`.tex` 是可编辑的普通文本，不会生成排版预览；`.log` 是打开时的一次性快照，不提供 tail/follow。大小达到或超过 10 MiB 的日志必须确认后才读取；若文件在初检后才跨过阈值，读取流程会重新检查并补做确认。
+
+上述系统文件关联边界已有配置契约测试，但 v1.2.0 候选尚待在独立 Windows 安装环境完成最终验收；在远端 CI 与独立安装验收完成前，源码仍保持为 Unreleased 候选。
 
 ### 构建产物
 
@@ -66,9 +86,15 @@ npm run dev
 | macOS | `.dmg` | — |
 | Linux | `.deb` | `.AppImage` |
 
+### Windows 本地发布资产
 
+先完成下方全部测试门禁，再在 Windows PowerShell 7 中运行：
 
+```powershell
+pwsh -File ./scripts/build-release.ps1
+```
 
+脚本从 `package.json` 读取版本，执行 NSIS 构建，并把安装程序、便携版 exe 与 zip 写入 `release/v<version>/`。可显式传入 `-Version`，但它必须与 `package.json` 完全一致。脚本本身不执行测试门禁，也不创建提交、标签或 GitHub Release。
 
 ## ⌨️ 快捷键
 
@@ -97,29 +123,41 @@ npm run dev
 
 ## 🔒 安全
 
-Markdown 渲染后的 HTML 经 [DOMPurify](https://github.com/cure53/DOMPurify) 消毒后再插入 DOM，防止 XSS。内容安全策略（CSP）在 `src-tauri/tauri.conf.json` 中配置，限制脚本、样式与外部资源来源。
+Markdown 渲染后的 HTML 经 [DOMPurify](https://github.com/cure53/DOMPurify) 消毒后再插入 DOM；内容安全策略（CSP）在 `src-tauri/tauri.conf.json` 中限制脚本、样式与外部资源来源。
+
+前端与 Rust 后端分别校验同一份 `shared/document-types.json`，策略损坏、未知类型、重复扩展名或不安全能力组合都会失败关闭。文件读取和保存由后端命令执行，并拒绝不支持的路径、目录和符号链接；读取时不跟随最终链接，保存使用同目录临时文件完整写入并同步后再原子替换，避免失败时截断原文件。`.log` 的只读限制也在后端独立执行。前端没有 Tauri 文件系统插件权限，系统文件关联则刻意保持在 `.md` / `.markdown` / `.txt`。
 
 ## 📁 项目结构
 
 ```
 md-reader/
+├── .github/
+│   └── workflows/
+│       ├── build.yml           # 多平台打包与发布
+│       └── checks.yml          # 前端与 Rust 持续验证
 ├── index.html                  # 入口页面
 ├── package.json                # 前端依赖
 ├── vite.config.js              # Vite 构建配置
 ├── README.md
-├── build-portable.sh           # Linux/macOS 构建脚本
-├── build-portable.bat          # Windows 构建脚本
 │
-├── assets/
-│   └── app-icon.png            # 应用图标源文件 (1024×1024)
+├── scripts/
+│   └── build-release.ps1       # Windows 本地发布资产打包
+│
+├── shared/
+│   └── document-types.json     # 前后端共享的运行时文档类型策略
 │
 ├── src/
 │   ├── css/
 │   │   ├── base.css            # 主题变量 & 全局样式
 │   │   ├── reader.css          # 阅读器排版 & UI 组件
-│   │   └── editor.css          # 编辑器分屏样式
+│   │   ├── editor.css          # 编辑器分屏样式
+│   │   └── scrollbar.css       # 独立滚动条样式
 │   └── js/
-│       ├── app.js              # 主逻辑
+│       ├── app.js              # 主逻辑与文档打开协调
+│       ├── document-session.js # 未保存切换保护与大日志打开流程
+│       ├── file-types.js       # 前端文档类型策略与对话框过滤器
+│       ├── text-decoding.js    # 浏览器严格 UTF-8 / GB18030 解码
+│       ├── window-theme.js     # 页面与原生窗口栏主题同步
 │       └── highlight.js        # 按需加载语言包 (30+)
 │
 ├── src-tauri/
@@ -128,9 +166,18 @@ md-reader/
 │   ├── build.rs
 │   ├── capabilities/
 │   │   └── default.json        # 权限声明
-│   ├── icons/                  # Tauri 完整图标集
+│   ├── icons/                  # Tauri 图标集；app-icon-source.png 为规范源图，透明圆角待实施
 │   └── src/
+│       ├── file_types.rs       # 后端类型策略、能力与路径分类
+│       ├── safe_file.rs        # 不跟随链接的读取与原子替换保存
 │       └── main.rs             # Rust 后端 (文件/进度/历史/CLI)
+│
+├── tests/
+│   ├── configuration.test.js   # 关联、权限和 CI 配置契约
+│   ├── document-session.test.js # 文档切换与大日志协调测试
+│   ├── file-types.test.js      # 共享策略与过滤器测试
+│   ├── text-decoding.test.js   # 浏览器编码回退测试
+│   └── window-theme.test.js    # 原生窗口栏主题同步测试
 │
 └── public/
     ├── sample.md               # 示例文档
@@ -148,7 +195,7 @@ md-reader/
 | 安全 | DOMPurify | Markdown HTML 输出消毒 |
 | 代码高亮 | highlight.js | 按需加载 30+ 语言 |
 | 后端 | Rust | 文件读写、进度存储、窗口管理 |
-| 插件 | tauri-plugin-dialog / fs / window-state | 文件对话框、文件系统、窗口状态 |
+| 插件 | tauri-plugin-dialog / window-state | 文件对话框、窗口状态；文件 I/O 只走自有后端命令 |
 
 
 
@@ -156,12 +203,38 @@ md-reader/
 
 | 组件 | 原始 | Gzip |
 |------|------|------|
-| CSS | 14 KB | 3.6 KB |
-| JS | 258 KB | 91 KB |
-| HTML | 6.4 KB | 1.9 KB |
-| **前端总计** | **278 KB** | **97 KB** |
+| CSS | 16.8 KB | 4.3 KB |
+| JS | 305.8 KB | 108.6 KB |
+| HTML | 8.3 KB | 2.5 KB |
+| **前端总计** | **330.9 KB** | **115.3 KB** |
+
+## ✅ 测试
+
+```bash
+# JavaScript 单元测试与配置契约
+npm test
+
+# 前端生产构建
+npm run build
+
+# Rust 格式、后端单元测试与静态检查
+cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+cargo test --manifest-path src-tauri/Cargo.toml --locked
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
+```
+
+测试覆盖共享格式策略、打开/保存过滤器、`.tex` 编辑能力、`.log` 只读与 10 MiB 确认竞态、未保存切换保护、系统文件关联边界，以及前端无文件系统权限。`.github/workflows/checks.yml` 已配置 Node.js 24、`npm ci`、前端测试/构建、Rust 格式检查、锁定依赖测试和 Clippy；当前候选改动已经形成本地提交但尚未推送，因此新工作流仍待首次远端运行。
 
 ## 📝 更新记录
+
+### Unreleased
+
+- 新增 `.tex` 可编辑纯文本与 `.log` 只读快照/搜索支持；大型日志打开前确认
+- 五种运行时扩展名由前后端共享策略统一分类，保存入口自动排除只读日志
+- 所有现有文档打开入口共用未保存修改保护；移除未使用的前端文件系统权限
+- 系统文件关联继续仅注册 `.md` / `.markdown` / `.txt`
+- 浅色、深色和护眼主题会同步原生窗口栏明暗状态
+- 源码版本已同步为 v1.2.0 候选；Tauri 前置构建、Node.js 24 CI、锁定依赖测试、Clippy 和标签发布门禁已补齐，但远端 CI 与独立安装验收尚未完成
 
 ### v1.1.2
 

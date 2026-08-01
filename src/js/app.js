@@ -3,6 +3,29 @@ import DOMPurify from 'dompurify';
 import hljs from './highlight.js';
 import markdownItAnchor from 'markdown-it-anchor';
 import markdownItToc from 'markdown-it-toc-done-right';
+import {
+  LARGE_LOG_WARNING_BYTES,
+  classifyDocumentPath,
+  getBrowserAccept,
+  getDocumentFormatLabel,
+  getOpenDialogFilters,
+  getSaveDialogFilters,
+  isSupportedDocumentPath,
+} from './file-types.js';
+import {
+  createDocumentViewState,
+  createSerialTaskQueue,
+  formatMiB,
+  isDraftDirty,
+  isEditorSnapshotCurrent,
+  openDocumentWithGuards,
+  reconcileSavedEditorState,
+} from './document-session.js';
+import { readBrowserTextFile } from './text-decoding.js';
+import {
+  createNativeWindowThemeSynchronizer,
+  getNativeWindowTheme,
+} from './window-theme.js';
 
 // ========== Markdown Engine ==========
 const md = new MarkdownIt({
@@ -32,8 +55,21 @@ md.use(markdownItToc, {
 // ========== State ==========
 const state = {
   filePath: null,
+  nativeFile: false,
   rawContent: '',
+  persistedContent: '',
+  kind: null,
+  renderMode: null,
+  readOnly: false,
+  toc: false,
+  sizeBytes: 0,
+  encoding: 'UTF-8',
   isDirty: false,
+  documentGeneration: 0,
+  editRevision: 0,
+  documentSwitchPending: false,
+  savePending: false,
+  fileSelectionPending: false,
   isEditMode: false,
   theme: 'light',
   fontSize: 16,
@@ -72,6 +108,7 @@ const els = {
   tocContent: $('toc-content'),
   readerView: $('reader-view'),
   editorView: $('editor-view'),
+  editorPreview: $('editor-preview'),
   markdownBody: $('markdown-body'),
   editorTextarea: $('editor-textarea'),
   previewBody: $('preview-body'),
@@ -83,6 +120,10 @@ const els = {
   themeIconSun: $('theme-icon-sun'),
   themeIconMoon: $('theme-icon-moon'),
   themeIconSepia: $('theme-icon-sepia'),
+  dirtySwitchDialog: $('dirty-switch-dialog'),
+  largeLogDialog: $('large-log-dialog'),
+  largeLogFileName: $('large-log-file-name'),
+  largeLogFileSize: $('large-log-file-size'),
 };
 
 // ========== Tauri Bridge ==========
@@ -124,108 +165,125 @@ async function getTauriWindow() {
   return import('@tauri-apps/api/window');
 }
 
+const syncNativeWindowTheme = createNativeWindowThemeSynchronizer({
+  isAvailable: () => tauriAvailable,
+  getCurrentWindow: async () => {
+    const windowApi = await getTauriWindow();
+    return windowApi.getCurrentWindow();
+  },
+  onError: error => {
+    console.warn('Native window theme sync failed:', error?.message || error);
+  },
+});
+
 async function initTauri() {
+  if (!getTauriGlobal()?.core?.invoke) {
+    console.log('Running in browser mode (no Tauri)');
+    return;
+  }
   try {
     await getTauriInvoke();
     tauriAvailable = true;
-    console.log('Tauri API available', getTauriGlobal()?.core ? '(global)' : '(module)');
+    console.log('Tauri API available (global)');
   } catch {
     console.log('Running in browser mode (no Tauri)');
   }
 }
 
-async function tauriOpenFile() {
-  if (tauriAvailable) {
-    try {
-      const dialog = await getTauriDialog();
-      const selected = await dialog.open({
-        multiple: false,
-        directory: false,
-        filters: [{ name: 'Markdown / Text', extensions: ['md', 'markdown', 'txt'] }],
-      });
-      if (!selected || Array.isArray(selected)) return null;
-      return await tauriInvoke('read_file', { path: selected });
-    } catch (e) {
-      console.error('Tauri open failed:', e);
-      showToast(`打开文件失败: ${e.message || e}`);
-    }
-    return null;
-  }
-  // Browser fallback
+async function selectTauriFile() {
+  const dialog = await getTauriDialog();
+  const selected = await dialog.open({
+    multiple: false,
+    directory: false,
+    filters: getOpenDialogFilters(),
+  });
+  return !selected || Array.isArray(selected) ? null : selected;
+}
+
+function selectBrowserFile() {
   return new Promise(resolve => {
-    els.fileInput.onchange = () => {
-      const file = els.fileInput.files[0];
-      if (!file) return resolve(null);
-      const reader = new FileReader();
-      reader.onload = () => resolve({ path: file.name, content: reader.result });
-      reader.readAsText(file);
+    let settled = false;
+    let focusTimer = null;
+    const cleanup = () => {
+      els.fileInput.removeEventListener('change', onChange);
+      els.fileInput.removeEventListener('cancel', onCancel);
+      window.removeEventListener('focus', onWindowFocus);
+      if (focusTimer) clearTimeout(focusTimer);
     };
+    const finish = file => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(file || null);
+    };
+    const onChange = () => finish(els.fileInput.files[0]);
+    const onCancel = () => finish(null);
+    const onWindowFocus = () => {
+      focusTimer = setTimeout(() => {
+        if (!els.fileInput.files?.length) finish(null);
+      }, 150);
+    };
+    els.fileInput.value = '';
+    els.fileInput.addEventListener('change', onChange);
+    els.fileInput.addEventListener('cancel', onCancel);
+    window.addEventListener('focus', onWindowFocus);
     els.fileInput.click();
   });
 }
 
-function isAbsoluteFilePath(path) {
-  if (!path) return false;
-  return /^([a-zA-Z]:[\\/]|\\\\|\/)/.test(path);
-}
-
-function isTxtFile(path) {
-  const ext = path?.split(/[/\\]/).pop()?.split('.').pop()?.toLowerCase();
-  return ext === 'txt';
-}
-
 function getSaveDialogOptions(path) {
-  const isTxt = isTxtFile(path || state.filePath);
+  const preferredPath = path || state.filePath;
+  const type = classifyDocumentPath(preferredPath);
+  const defaultExtension = type.editable ? type.extension : 'md';
   return {
-    filters: isTxt
-      ? [{ name: 'Text', extensions: ['txt'] }, { name: 'Markdown', extensions: ['md'] }]
-      : [{ name: 'Markdown', extensions: ['md'] }, { name: 'Text', extensions: ['txt'] }],
-    defaultPath: path || (isTxt ? 'untitled.txt' : 'untitled.md'),
+    filters: getSaveDialogFilters(preferredPath),
+    defaultPath: preferredPath || `untitled.${defaultExtension}`,
   };
 }
 
-async function tauriSaveFile(path, content) {
+async function tauriSaveFile(path, content, canOverwriteCurrentPath) {
   if (tauriAvailable) {
-    try {
-      if (!isAbsoluteFilePath(path)) {
-        const dialog = await getTauriDialog();
-        path = await dialog.save(getSaveDialogOptions(path));
-        if (!path) return false;
-      }
-      await tauriInvoke('save_file', { path, content });
-      return path;
-    } catch (e) {
-      console.error('Tauri save failed:', e);
-      return false;
+    if (!canOverwriteCurrentPath) {
+      const dialog = await getTauriDialog();
+      path = await dialog.save(getSaveDialogOptions(path));
+      if (!path) return null;
     }
+    await tauriInvoke('save_file', { path, content });
+    return path;
   }
   // Browser fallback
-  const isTxt = isTxtFile(path || state.filePath);
+  const targetPath = path || state.filePath || 'untitled.md';
+  const type = classifyDocumentPath(targetPath);
   const blob = new Blob([content], {
-    type: isTxt ? 'text/plain;charset=utf-8' : 'text/markdown;charset=utf-8',
+    type: type.renderMode === 'plain'
+      ? 'text/plain;charset=utf-8'
+      : 'text/markdown;charset=utf-8',
   });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = path || (isTxt ? 'untitled.txt' : 'untitled.md');
+  a.download = targetPath;
   a.click();
   URL.revokeObjectURL(a.href);
-  return true;
+  return targetPath;
 }
 
 // ========== Reading Progress ==========
-async function saveProgress() {
-  if (!state.filePath || !tauriAvailable) return;
-  const container = state.isEditMode ? els.readerView : els.readerView;
-  const scrollEl = els.markdownBody.parentElement;
-  if (!scrollEl) return;
-
-  const pct = scrollEl.scrollHeight > scrollEl.clientHeight
+function scrollPercentage(scrollEl) {
+  return scrollEl.scrollHeight > scrollEl.clientHeight
     ? scrollEl.scrollTop / (scrollEl.scrollHeight - scrollEl.clientHeight)
     : 0;
+}
+
+async function saveProgress() {
+  if (!state.filePath || !tauriAvailable) return;
+  const path = state.filePath;
+  const { scrollRoot: scrollEl } = getReaderContext();
+  if (!scrollEl) return;
+  const pct = scrollPercentage(scrollEl);
 
   try {
     await tauriInvoke('save_reading_progress', {
-      path: state.filePath,
+      path,
       scrollPct: Math.min(1, Math.max(0, pct)),
     });
   } catch (e) {
@@ -235,13 +293,18 @@ async function saveProgress() {
 
 async function loadProgress() {
   if (!state.filePath || !tauriAvailable) return;
+  const path = state.filePath;
+  const generation = state.documentGeneration;
+  const { scrollRoot: scrollEl } = getReaderContext();
   try {
-    const progress = await tauriInvoke('load_reading_progress', { path: state.filePath });
+    const progress = await tauriInvoke('load_reading_progress', { path });
     if (progress && progress.scroll_pct > 0) {
-      // Wait for render
       requestAnimationFrame(() => {
-        const scrollEl = els.markdownBody.parentElement;
-        if (scrollEl) {
+        if (
+          scrollEl
+          && state.filePath === path
+          && state.documentGeneration === generation
+        ) {
           const maxScroll = scrollEl.scrollHeight - scrollEl.clientHeight;
           scrollEl.scrollTop = progress.scroll_pct * maxScroll;
         }
@@ -252,27 +315,182 @@ async function loadProgress() {
   }
 }
 
-function onScroll() {
+function onScroll(scrollEl) {
+  if (scrollEl !== getReaderContext().scrollRoot) return;
   clearTimeout(state.scrollSaveTimer);
-  state.scrollSaveTimer = setTimeout(saveProgress, 800);
+  const path = state.filePath;
+  const generation = state.documentGeneration;
+  state.scrollSaveTimer = setTimeout(() => {
+    if (state.filePath === path && state.documentGeneration === generation) {
+      void saveProgress();
+    }
+  }, 800);
 
-  // Update progress bar
-  const scrollEl = els.markdownBody.parentElement;
   if (scrollEl && els.progressBar) {
-    const pct = scrollEl.scrollHeight > scrollEl.clientHeight
-      ? (scrollEl.scrollTop / (scrollEl.scrollHeight - scrollEl.clientHeight)) * 100
-      : 0;
+    const pct = scrollPercentage(scrollEl) * 100;
     els.progressBar.style.width = pct + '%';
   }
 }
 
 // ========== Helpers ==========
 function escapeHtml(str) {
-  return str
+  return String(str)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+const ERROR_MESSAGES = {
+  policy_invalid: '文档类型策略无效，应用已阻止文件访问',
+  unsupported_type: '不支持的文件类型',
+  missing_file: '文件不存在或已被移动',
+  not_regular_file: '只能打开普通文件',
+  metadata_failed: '无法读取文件信息',
+  large_log_confirmation_required: '该日志需要确认后才能读取',
+  decode_failed: '无法识别文件编码（仅支持 UTF-8 或 GBK/GB18030）',
+  read_failed: '读取文件失败',
+  readonly_file: 'LOG 文件以只读模式打开',
+  save_failed: '保存文件失败',
+};
+
+function normalizeAppError(error) {
+  if (error && typeof error === 'object') {
+    return {
+      code: typeof error.code === 'string' ? error.code : '',
+      message: typeof error.message === 'string' ? error.message : '',
+    };
+  }
+  if (typeof error === 'string') {
+    try {
+      const parsed = JSON.parse(error);
+      if (parsed && typeof parsed === 'object') return normalizeAppError(parsed);
+    } catch {}
+    return { code: '', message: error };
+  }
+  return { code: '', message: String(error ?? '') };
+}
+
+function describeAppError(error, prefix) {
+  const normalized = normalizeAppError(error);
+  const detail = ERROR_MESSAGES[normalized.code] || normalized.message || '未知错误';
+  return prefix ? `${prefix}: ${detail}` : detail;
+}
+
+function createClientError(code, message = ERROR_MESSAGES[code]) {
+  const error = new Error(message || code);
+  error.code = code;
+  return error;
+}
+
+function promptDialog(dialog, defaultResult = 'cancel') {
+  const previouslyFocused = document.activeElement;
+  return new Promise(resolve => {
+    let settled = false;
+    const supportsNativeDialog = typeof dialog.showModal === 'function';
+    const cleanup = () => {
+      dialog.removeEventListener('click', onClick);
+      dialog.removeEventListener('cancel', onCancel);
+      dialog.removeEventListener('close', onClose);
+      dialog.removeEventListener('keydown', onKeyDown);
+    };
+    const finish = (result, closeDialog = true) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (closeDialog && dialog.hasAttribute('open')) {
+        if (supportsNativeDialog) dialog.close();
+        else dialog.removeAttribute('open');
+      }
+      dialog.classList.remove('dialog-fallback-open');
+      if (
+        previouslyFocused instanceof HTMLElement
+        && previouslyFocused.isConnected
+        && !previouslyFocused.hasAttribute('disabled')
+      ) {
+        requestAnimationFrame(() => previouslyFocused.focus());
+      }
+      resolve(result);
+    };
+    const onClick = event => {
+      const button = event.target instanceof Element
+        ? event.target.closest('button[data-dialog-result]')
+        : null;
+      if (button) finish(button.dataset.dialogResult);
+    };
+    const onCancel = event => {
+      event.preventDefault();
+      finish(defaultResult);
+    };
+    const onClose = () => finish(defaultResult, false);
+    const onKeyDown = event => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        finish(defaultResult);
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const buttons = [...dialog.querySelectorAll('button:not([disabled])')];
+      if (!buttons.length) return;
+      const first = buttons[0];
+      const last = buttons[buttons.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    dialog.addEventListener('click', onClick);
+    dialog.addEventListener('cancel', onCancel);
+    dialog.addEventListener('close', onClose);
+    dialog.addEventListener('keydown', onKeyDown);
+    if (supportsNativeDialog) dialog.showModal();
+    else {
+      dialog.setAttribute('open', '');
+      dialog.classList.add('dialog-fallback-open');
+    }
+    dialog.querySelector('button:not([disabled])')?.focus();
+  });
+}
+
+function requestDirtySwitchDecision() {
+  return promptDialog(els.dirtySwitchDialog, 'cancel');
+}
+
+function confirmLargeLog(inspection) {
+  const name = inspection.path.split(/[/\\]/).pop() || inspection.path;
+  els.largeLogFileName.textContent = name;
+  els.largeLogFileSize.textContent = formatMiB(inspection.sizeBytes);
+  return promptDialog(els.largeLogDialog, 'cancel').then(result => result === 'continue');
+}
+
+function browserInspection(file) {
+  const type = classifyDocumentPath(file.name);
+  if (type.kind === 'unsupported') throw createClientError('unsupported_type');
+  return {
+    path: file.name,
+    kind: type.kind,
+    renderMode: type.renderMode,
+    readOnly: !type.editable,
+    sizeBytes: file.size,
+    requiresLargeFileConfirmation:
+      type.warnWhenLarge && file.size >= LARGE_LOG_WARNING_BYTES,
+  };
+}
+
+async function readBrowserDocument(file, allowLargeLog) {
+  const inspection = browserInspection(file);
+  if (inspection.requiresLargeFileConfirmation && !allowLargeLog) {
+    throw createClientError('large_log_confirmation_required');
+  }
+  const decoded = await readBrowserTextFile(file);
+  return {
+    ...inspection,
+    ...decoded,
+  };
 }
 
 function copyCode(btn) {
@@ -313,7 +531,7 @@ function renderWelcome() {
       <div class="welcome-icon">📖</div>
       <h1>MD Reader</h1>
       <p>轻量级 Markdown 阅读器</p>
-      <p class="hint">拖拽 .md / .txt 文件到此处，或点击打开</p>
+      <p class="hint">拖拽 Markdown、TXT、TeX 或 LOG 文件到此处，或点击打开</p>
       <p class="shortcut-hint">Ctrl+O 打开 · Ctrl+S 保存 · Ctrl+F 搜索 · Ctrl+\\ 目录</p>
     </div>
     ${recentHtml}
@@ -329,8 +547,8 @@ function renderPlainText(content) {
   return `<div class="plain-text">${escapeHtml(content)}</div>`;
 }
 
-function renderContent(content, path = state.filePath) {
-  return isTxtFile(path) ? renderPlainText(content) : renderMarkdown(content);
+function renderContent(content, renderMode = state.renderMode) {
+  return renderMode === 'plain' ? renderPlainText(content) : renderMarkdown(content);
 }
 
 function renderMarkdown(content) {
@@ -361,6 +579,7 @@ function getReaderContext() {
 }
 
 function buildTOC() {
+  if (!state.toc) return '';
   const { markdownBody } = getReaderContext();
   const headings = markdownBody.querySelectorAll('h1[id], h2[id], h3[id], h4[id]');
   if (headings.length < 2) return '';
@@ -380,15 +599,22 @@ function refreshTOC() {
 function updateView(content) {
   const html = renderContent(content);
   els.markdownBody.innerHTML = html;
-  els.previewBody.innerHTML = html;
+  els.previewBody.innerHTML = state.readOnly ? '' : html;
+  if (state.readOnly) els.editorTextarea.value = '';
   els.tocContent.innerHTML = buildTOC();
   updateStatusInfo(content);
   observeHeadings();
 }
 
 function setFileEncoding(encoding) {
+  state.encoding = encoding || 'UTF-8';
   if (els.statusEncoding) {
-    els.statusEncoding.textContent = encoding || 'UTF-8';
+    if (!state.filePath) {
+      els.statusEncoding.textContent = state.encoding;
+      return;
+    }
+    const readOnlyLabel = state.readOnly ? ' · 只读' : '';
+    els.statusEncoding.textContent = `${getDocumentFormatLabel(state.filePath)} · ${state.encoding}${readOnlyLabel}`;
   }
 }
 
@@ -444,93 +670,287 @@ function observeHeadings() {
 }
 
 // ========== File Operations ==========
-async function openFileByPath(path) {
-  if (!path || !tauriAvailable) return false;
+const serializeDocumentMutation = createSerialTaskQueue();
 
-  if (state.filePath) saveProgress();
+function documentInteractionLocked() {
+  return state.documentSwitchPending || state.savePending || state.fileSelectionPending;
+}
 
-  try {
-    const result = await tauriInvoke('read_file', { path });
-    if (!result) return false;
+function setDocumentIdentity(path, dirty = false) {
+  const name = path?.split(/[/\\]/).pop() || 'MD Reader';
+  els.fileName.textContent = `${name}${dirty ? ' ●' : ''}`;
+  els.fileName.classList.toggle('has-file', Boolean(path));
+  document.title = path ? `${name} — MD Reader` : 'MD Reader';
+}
 
-    state.filePath = result.path;
-    state.rawContent = result.content;
-    state.isDirty = false;
-    setFileEncoding(result.encoding);
+function applyModeVisibility() {
+  els.readerView.classList.toggle('hidden', state.isEditMode);
+  els.editorView.classList.toggle('hidden', !state.isEditMode);
+  els.statusMode.textContent = state.isEditMode ? '编辑' : '阅读';
+}
 
-    const name = result.path.split(/[/\\]/).pop();
-    els.fileName.textContent = name;
-    els.fileName.classList.add('has-file');
-    document.title = `${name} — MD Reader`;
-
-    els.editorTextarea.value = state.rawContent;
-    updateView(state.rawContent);
-    loadProgress();
-    await loadRecentFiles();
-    return true;
-  } catch (e) {
-    console.error('Open file by path failed:', e);
-    return false;
+function applyDocumentControls() {
+  const viewState = createDocumentViewState({
+    content: state.rawContent,
+    readOnly: state.readOnly,
+    toc: state.toc,
+  });
+  const controlsLocked = state.documentSwitchPending || state.savePending;
+  els.btnOpen.disabled = controlsLocked || state.fileSelectionPending;
+  els.btnMode.disabled = viewState.editorDisabled || controlsLocked;
+  els.btnSave.disabled = viewState.saveDisabled || controlsLocked;
+  els.btnToc.disabled = viewState.tocDisabled || controlsLocked;
+  els.editorTextarea.disabled = viewState.editorDisabled || state.documentSwitchPending;
+  els.main.setAttribute('aria-busy', String(controlsLocked));
+  if (viewState.tocDisabled) {
+    state.tocVisible = false;
+    els.tocPanel.classList.add('hidden');
   }
+
+  els.btnMode.title = state.readOnly
+    ? 'LOG 文件以只读模式打开'
+    : '切换编辑/阅读 (Ctrl+E)';
+  els.btnSave.title = state.readOnly
+    ? 'LOG 文件以只读模式打开'
+    : '保存 (Ctrl+S)';
+  els.btnToc.title = state.toc
+    ? '目录 (Ctrl+\\)'
+    : '纯文本文档不提供目录';
+  els.btnMode.setAttribute('aria-label', els.btnMode.title);
+  els.btnSave.setAttribute('aria-label', els.btnSave.title);
+  els.btnToc.setAttribute('aria-label', els.btnToc.title);
+}
+
+function applyOpenedDocument(documentData, { nativeFile }) {
+  const type = classifyDocumentPath(documentData.path);
+  if (type.kind === 'unsupported') throw createClientError('unsupported_type');
+  if (
+    (documentData.kind && documentData.kind !== type.kind)
+    || (documentData.renderMode && documentData.renderMode !== type.renderMode)
+    || (typeof documentData.readOnly === 'boolean' && documentData.readOnly !== !type.editable)
+  ) {
+    throw createClientError('policy_invalid', '前后端文档类型能力不一致');
+  }
+
+  clearTimeout(previewTimer);
+  previewTimer = null;
+  clearTimeout(state.scrollSaveTimer);
+  state.scrollSaveTimer = null;
+  state.documentGeneration += 1;
+  state.editRevision = 0;
+  state.filePath = documentData.path;
+  state.nativeFile = nativeFile;
+  state.rawContent = String(documentData.content ?? '');
+  state.persistedContent = state.rawContent;
+  state.kind = documentData.kind || type.kind;
+  state.renderMode = documentData.renderMode || type.renderMode;
+  state.readOnly = documentData.readOnly ?? !type.editable;
+  state.toc = type.toc;
+  state.sizeBytes = Number(documentData.sizeBytes) || 0;
+  state.isDirty = false;
+  if (state.readOnly) state.isEditMode = false;
+
+  clearSearch();
+  applyModeVisibility();
+  els.editorTextarea.value = state.readOnly ? '' : state.rawContent;
+  applyDocumentControls();
+  updateView(state.rawContent);
+  setFileEncoding(documentData.encoding);
+
+  setDocumentIdentity(documentData.path);
+  els.readerView.scrollTop = 0;
+  els.editorTextarea.scrollTop = 0;
+  els.editorPreview.scrollTop = 0;
+  if (els.progressBar) els.progressBar.style.width = '0%';
+}
+
+async function performDocumentOpen({
+  path,
+  inspectDocument,
+  readDocument,
+  refreshRecentFiles,
+  nativeFile,
+}) {
+  const focusBeforeSwitch = document.activeElement;
+  let opened = false;
+  state.documentSwitchPending = true;
+  applyDocumentControls();
+  try {
+    const result = await openDocumentWithGuards({
+      path,
+      inspectDocument,
+      confirmLargeLog,
+      isDirty: () => state.isDirty,
+      decideDirtySwitch: requestDirtySwitchDecision,
+      saveCurrentDocument: () => performSaveFile({ allowDuringSwitch: true }),
+      readDocument,
+    });
+    if (result.status !== 'opened') return false;
+
+    if (state.filePath) await saveProgress();
+    applyOpenedDocument(result.document, { nativeFile });
+    if (refreshRecentFiles) await loadRecentFiles();
+    await loadProgress();
+    opened = true;
+    return true;
+  } catch (error) {
+    console.error('Open document failed:', error);
+    showToast(describeAppError(error, '打开文件失败'));
+    return false;
+  } finally {
+    state.documentSwitchPending = false;
+    applyDocumentControls();
+    if (
+      !opened
+      && focusBeforeSwitch instanceof HTMLElement
+      && focusBeforeSwitch.isConnected
+      && !focusBeforeSwitch.hasAttribute('disabled')
+    ) {
+      requestAnimationFrame(() => focusBeforeSwitch.focus());
+    }
+  }
+}
+
+function openFileByPath(path) {
+  if (!path || !tauriAvailable) return Promise.resolve(false);
+  return serializeDocumentMutation(() => performDocumentOpen({
+    path,
+    inspectDocument: targetPath => tauriInvoke('inspect_document', { path: targetPath }),
+    readDocument: (targetPath, allowLargeLog) => tauriInvoke('read_file', {
+      path: targetPath,
+      allowLargeLog,
+    }),
+    refreshRecentFiles: true,
+    nativeFile: true,
+  }));
+}
+
+function openBrowserFile(file) {
+  return serializeDocumentMutation(() => performDocumentOpen({
+    path: file.name,
+    inspectDocument: async () => browserInspection(file),
+    readDocument: async (_path, allowLargeLog) => readBrowserDocument(file, allowLargeLog),
+    refreshRecentFiles: false,
+    nativeFile: false,
+  }));
 }
 
 async function openFile() {
-  // Save current progress before switching
-  if (state.filePath) saveProgress();
-
-  const result = await tauriOpenFile();
-  if (!result) return;
-
-  state.filePath = result.path;
-  state.rawContent = result.content;
-  state.isDirty = false;
-  setFileEncoding(result.encoding);
-
-  const name = result.path.split(/[/\\]/).pop();
-  els.fileName.textContent = name;
-  els.fileName.classList.add('has-file');
-  document.title = `${name} — MD Reader`;
-
-  els.editorTextarea.value = state.rawContent;
-  updateView(state.rawContent);
-
-  await loadRecentFiles();
-
-  // Restore reading progress
-  loadProgress();
+  if (documentInteractionLocked()) {
+    showToast('文档操作正在进行，请稍候', 'info');
+    return false;
+  }
+  state.fileSelectionPending = true;
+  applyDocumentControls();
+  try {
+    if (tauriAvailable) {
+      const path = await selectTauriFile();
+      return path ? await openFileByPath(path) : false;
+    }
+    const file = await selectBrowserFile();
+    return file ? await openBrowserFile(file) : false;
+  } catch (error) {
+    console.error('Select file failed:', error);
+    showToast(describeAppError(error, '打开文件失败'));
+    return false;
+  } finally {
+    state.fileSelectionPending = false;
+    applyDocumentControls();
+  }
 }
 
-async function saveFile() {
-  const content = state.isEditMode ? els.editorTextarea.value : state.rawContent;
-  const savedPath = await tauriSaveFile(state.filePath, content);
-  if (savedPath) {
-    state.filePath = savedPath;
-    state.rawContent = content;
-    state.isDirty = false;
-    const name = savedPath.split(/[/\\]/).pop();
-    els.fileName.textContent = name;
-    els.fileName.classList.add('has-file');
-    document.title = `${name} — MD Reader`;
+async function performSaveFile({ allowDuringSwitch = false } = {}) {
+  if (state.documentSwitchPending && !allowDuringSwitch) return false;
+  if (state.readOnly) {
+    showToast(ERROR_MESSAGES.readonly_file, 'info');
+    return false;
   }
+  const content = state.isEditMode ? els.editorTextarea.value : state.rawContent;
+  const generationAtStart = state.documentGeneration;
+  const revisionAtStart = state.editRevision;
+  state.savePending = true;
+  applyDocumentControls();
+  try {
+    const savedPath = await tauriSaveFile(state.filePath, content, state.nativeFile);
+    if (!savedPath) return false;
+    const type = classifyDocumentPath(savedPath);
+    if (!type.editable) throw createClientError('unsupported_type');
+    if (state.documentGeneration !== generationAtStart) return true;
+
+    const currentEditorContent = state.isEditMode
+      ? els.editorTextarea.value
+      : state.rawContent;
+    const savedState = reconcileSavedEditorState({
+      savedContent: content,
+      currentEditorContent,
+      revisionAtStart,
+      currentRevision: state.editRevision,
+    });
+
+    state.filePath = savedPath;
+    state.nativeFile = tauriAvailable;
+    state.persistedContent = savedState.persistedContent;
+    state.rawContent = savedState.rawContent;
+    state.kind = type.kind;
+    state.renderMode = type.renderMode;
+    state.readOnly = false;
+    state.toc = type.toc;
+    state.sizeBytes = new TextEncoder().encode(content).byteLength;
+    state.isDirty = savedState.isDirty;
+    applyDocumentControls();
+    if (savedState.isDirty) {
+      els.previewBody.innerHTML = renderContent(savedState.previewContent);
+      refreshTOC();
+      updateStatusInfo(savedState.previewContent);
+    } else {
+      clearTimeout(previewTimer);
+      previewTimer = null;
+      updateView(savedState.previewContent);
+    }
+    setFileEncoding('UTF-8');
+    setDocumentIdentity(savedPath, savedState.isDirty);
+    return true;
+  } catch (error) {
+    console.error('Save file failed:', error);
+    showToast(describeAppError(error, '保存文件失败'));
+    return false;
+  } finally {
+    state.savePending = false;
+    applyDocumentControls();
+  }
+}
+
+function saveFile() {
+  if (documentInteractionLocked()) {
+    showToast('文档操作正在进行，请稍候', 'info');
+    return Promise.resolve(false);
+  }
+  return serializeDocumentMutation(() => performSaveFile());
 }
 
 // ========== Mode Toggle ==========
 function toggleEditMode() {
+  if (documentInteractionLocked()) {
+    showToast('文档操作正在进行，请稍候', 'info');
+    return;
+  }
+  if (state.readOnly) {
+    showToast(ERROR_MESSAGES.readonly_file, 'info');
+    return;
+  }
   state.isEditMode = !state.isEditMode;
 
   if (state.isEditMode) {
-    els.readerView.classList.add('hidden');
-    els.editorView.classList.remove('hidden');
-    els.statusMode.textContent = '编辑';
     els.editorTextarea.value = state.rawContent;
     els.previewBody.innerHTML = renderContent(state.rawContent);
     refreshTOC();
+    applyModeVisibility();
     els.editorTextarea.focus();
   } else {
-    els.readerView.classList.remove('hidden');
-    els.editorView.classList.add('hidden');
-    els.statusMode.textContent = '阅读';
+    clearTimeout(previewTimer);
+    previewTimer = null;
     state.rawContent = els.editorTextarea.value;
+    applyModeVisibility();
     updateView(state.rawContent);
   }
 }
@@ -544,6 +964,8 @@ function applyTheme(theme) {
     document.documentElement.setAttribute('data-theme', theme);
   }
   localStorage.setItem('md-reader-theme', theme);
+  document.documentElement.style.colorScheme = getNativeWindowTheme(theme);
+  void syncNativeWindowTheme(theme);
 
   // Update theme icon (light / dark / sepia)
   els.themeIconSun.classList.toggle('hidden', theme !== 'light');
@@ -563,7 +985,8 @@ function cycleTheme() {
 }
 
 function loadTheme() {
-  const saved = localStorage.getItem('md-reader-theme') || 'light';
+  const stored = localStorage.getItem('md-reader-theme');
+  const saved = themes.includes(stored) ? stored : 'light';
   applyTheme(saved);
 }
 
@@ -584,6 +1007,14 @@ function loadFontSize() {
 
 // ========== TOC ==========
 function toggleTOC() {
+  if (documentInteractionLocked()) {
+    showToast('文档操作正在进行，请稍候', 'info');
+    return;
+  }
+  if (!state.toc) {
+    showToast('纯文本文档不提供目录', 'info');
+    return;
+  }
   state.tocVisible = !state.tocVisible;
   els.tocPanel.classList.toggle('hidden', !state.tocVisible);
 }
@@ -623,10 +1054,12 @@ function clearSearch() {
   state.searchResults = [];
   state.searchIndex = -1;
   els.searchCount.textContent = '';
-  els.markdownBody.querySelectorAll('.search-highlight, .search-current').forEach(el => {
-    const parent = el.parentNode;
-    parent.replaceChild(document.createTextNode(el.textContent), el);
-    parent.normalize();
+  [els.markdownBody, els.previewBody].forEach(body => {
+    body.querySelectorAll('.search-highlight, .search-current').forEach(el => {
+      const parent = el.parentNode;
+      parent.replaceChild(document.createTextNode(el.textContent), el);
+      parent.normalize();
+    });
   });
 }
 
@@ -634,7 +1067,7 @@ function doSearch(query) {
   clearSearch();
   if (!query) return;
 
-  const body = els.markdownBody;
+  const { markdownBody: body } = getReaderContext();
   const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
   const textNodes = [];
   while (walker.nextNode()) textNodes.push(walker.currentNode);
@@ -710,35 +1143,53 @@ function searchPrev() {
 
 // ========== Editor ==========
 els.editorTextarea.addEventListener('keydown', e => {
+  if (state.readOnly || state.documentSwitchPending) return;
   if (e.key === 'Tab') {
     e.preventDefault();
     const start = e.target.selectionStart;
     const end = e.target.selectionEnd;
     e.target.value = e.target.value.substring(0, start) + '    ' + e.target.value.substring(end);
     e.target.selectionStart = e.target.selectionEnd = start + 4;
+    e.target.dispatchEvent(new Event('input', { bubbles: true }));
   }
 });
 
 let previewTimer = null;
-els.editorTextarea.addEventListener('input', () => {
-  state.isDirty = true;
-  if (!els.fileName.textContent.includes('●')) {
-    els.fileName.textContent += ' ●';
-  }
+function onEditorChanged() {
+  if (state.readOnly || state.documentSwitchPending) return;
+  state.editRevision += 1;
+  state.isDirty = isDraftDirty(els.editorTextarea.value, state.persistedContent);
+  setDocumentIdentity(state.filePath, state.isDirty);
+  const snapshot = {
+    generation: state.documentGeneration,
+    revision: state.editRevision,
+  };
   clearTimeout(previewTimer);
   previewTimer = setTimeout(() => {
+    if (
+      !state.isEditMode
+      || !isEditorSnapshotCurrent(snapshot, {
+        generation: state.documentGeneration,
+        revision: state.editRevision,
+        readOnly: state.readOnly,
+      })
+    ) return;
     const content = els.editorTextarea.value;
     els.previewBody.innerHTML = renderContent(content);
     refreshTOC();
     updateStatusInfo(content);
   }, 150);
-});
+}
+
+els.editorTextarea.addEventListener('input', onEditorChanged);
 
 // ========== Toast ==========
 function showToast(message, type = 'error') {
   const toast = document.createElement('div');
   toast.className = `toast toast-${type}`;
   toast.textContent = message;
+  toast.setAttribute('role', type === 'error' ? 'alert' : 'status');
+  toast.setAttribute('aria-live', type === 'error' ? 'assertive' : 'polite');
   document.body.appendChild(toast);
   requestAnimationFrame(() => toast.classList.add('show'));
   setTimeout(() => {
@@ -765,12 +1216,11 @@ function hideDropOverlay() {
 }
 
 function isSupportedDropPath(path) {
-  const ext = path.split(/[/\\]/).pop()?.split('.').pop()?.toLowerCase();
-  return ext && ['md', 'markdown', 'txt'].includes(ext);
+  return isSupportedDocumentPath(path);
 }
 
 async function initNativeTauriDragDrop() {
-  // Hybrid: frontend onDragDropEvent opens files on drop; Rust also emits file-opened as backup.
+  // The frontend owns drag/drop opening; Rust only forwards OS and CLI open events.
   const handleDropPaths = paths => {
     hideDropOverlay();
     for (const path of paths) {
@@ -780,7 +1230,7 @@ async function initNativeTauriDragDrop() {
       }
     }
     if (paths?.length) {
-      showToast('不支持的文件类型，请拖入 .md / .txt 文件');
+      showToast(`不支持的文件类型，请拖入 ${getBrowserAccept().split(',').join(' / ')} 文件`);
     }
   };
 
@@ -830,10 +1280,18 @@ document.addEventListener('keydown', e => {
   const ctrl = e.ctrlKey || e.metaKey;
 
   if (ctrl && e.key === 'o') { e.preventDefault(); openFile(); }
-  if (ctrl && e.key === 's') { e.preventDefault(); saveFile(); }
+  if (ctrl && e.key === 's') {
+    e.preventDefault();
+    if (state.readOnly) showToast(ERROR_MESSAGES.readonly_file, 'info');
+    else saveFile();
+  }
   if (ctrl && e.key === 'f') { e.preventDefault(); toggleSearch(); }
   if (ctrl && e.key === '\\') { e.preventDefault(); toggleTOC(); }
-  if (ctrl && e.key === 'e') { e.preventDefault(); toggleEditMode(); }
+  if (ctrl && e.key === 'e') {
+    e.preventDefault();
+    if (state.readOnly) showToast(ERROR_MESSAGES.readonly_file, 'info');
+    else toggleEditMode();
+  }
   if (ctrl && e.key === '=') { e.preventDefault(); changeFontSize(1); }
   if (ctrl && e.key === '-') { e.preventDefault(); changeFontSize(-1); }
   if (e.key === 'Escape' && state.searchVisible) toggleSearch();
@@ -845,14 +1303,18 @@ document.addEventListener('keydown', e => {
 
 // ========== Scroll Events ==========
 els.readerView.addEventListener('scroll', () => {
-  onScroll();
+  onScroll(els.readerView);
+});
+els.editorPreview.addEventListener('scroll', () => {
+  onScroll(els.editorPreview);
 });
 
 // ========== Scroll Sync (Edit Mode) ==========
 els.editorTextarea.addEventListener('scroll', () => {
   if (!state.isEditMode) return;
-  const pct = els.editorTextarea.scrollTop / (els.editorTextarea.scrollHeight - els.editorTextarea.clientHeight);
-  const preview = els.editorView.querySelector('.editor-preview');
+  const maxEditorScroll = els.editorTextarea.scrollHeight - els.editorTextarea.clientHeight;
+  const pct = maxEditorScroll > 0 ? els.editorTextarea.scrollTop / maxEditorScroll : 0;
+  const preview = els.editorPreview;
   if (preview) {
     preview.scrollTop = pct * (preview.scrollHeight - preview.clientHeight);
   }
@@ -861,7 +1323,7 @@ els.editorTextarea.addEventListener('scroll', () => {
 // ========== Event Bindings ==========
 els.btnOpen.addEventListener('click', openFile);
 els.markdownBody.addEventListener('click', e => {
-  const btn = e.target.closest('.code-copy');
+  const btn = e.target instanceof Element ? e.target.closest('.code-copy') : null;
   if (btn) copyCode(btn);
 });
 els.btnSave.addEventListener('click', saveFile);
@@ -881,11 +1343,13 @@ window.addEventListener('beforeunload', saveProgress);
 
 // ========== Init ==========
 async function init() {
-  await initTauri();
-  await initDragDrop();
+  els.fileInput.accept = getBrowserAccept();
   loadTheme();
   loadFontSize();
   renderWelcome();
+  await initTauri();
+  void syncNativeWindowTheme(state.theme);
+  await initDragDrop();
   await loadRecentFiles();
 
   if (tauriAvailable) {
