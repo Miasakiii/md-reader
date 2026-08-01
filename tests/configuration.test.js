@@ -107,6 +107,19 @@ test('continuous integration runs frontend and Rust verification', () => {
   }
 });
 
+test('GitHub Actions use Node 24 compatible action majors', () => {
+  const checksWorkflow = readProjectFile('.github/workflows/checks.yml');
+  const buildWorkflow = readProjectFile('.github/workflows/build.yml');
+
+  for (const workflow of [checksWorkflow, buildWorkflow]) {
+    assert.match(workflow, /actions\/checkout@v6/);
+    assert.match(workflow, /actions\/setup-node@v6/);
+  }
+
+  assert.match(buildWorkflow, /actions\/upload-artifact@v7/);
+  assert.match(buildWorkflow, /actions\/download-artifact@v8/);
+});
+
 test('tag releases wait for a reproducible verification gate', () => {
   const workflow = readProjectFile('.github/workflows/build.yml');
   const downloadWindowsAsset = workflow.indexOf('- name: Download Windows assets');
