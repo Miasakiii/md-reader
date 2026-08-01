@@ -120,6 +120,31 @@ test('GitHub Actions use Node 24 compatible action majors', () => {
   assert.match(buildWorkflow, /actions\/download-artifact@v8/);
 });
 
+test('Windows release packaging verifies generated PE versions before upload', () => {
+  const buildWorkflow = readProjectFile('.github/workflows/build.yml');
+  const localBuildScript = readProjectFile('scripts/build-release.ps1');
+  let verifier = '';
+
+  try {
+    verifier = readProjectFile('scripts/verify-windows-release.ps1');
+  } catch (error) {
+    assert.equal(error.code, 'ENOENT');
+  }
+
+  const packageAssets = buildWorkflow.indexOf('- name: Package Windows portable assets');
+  const verifyAssets = buildWorkflow.indexOf('- name: Verify Windows release versions');
+  const uploadAssets = buildWorkflow.indexOf('- name: Upload Windows release assets');
+
+  assert.match(verifier, /VersionInfo\.ProductVersion/);
+  assert.match(verifier, /does not match expected/);
+  assert.match(localBuildScript, /verify-windows-release\.ps1/);
+  assert.match(buildWorkflow, /-Filter "\*_\$\{version\}_\*-setup\.exe"/);
+  assert.match(buildWorkflow, /\$setupCandidates\.Count -ne 1/);
+  assert.ok(packageAssets >= 0);
+  assert.ok(verifyAssets > packageAssets);
+  assert.ok(uploadAssets > verifyAssets);
+});
+
 test('tag releases wait for a reproducible verification gate', () => {
   const workflow = readProjectFile('.github/workflows/build.yml');
   const downloadWindowsAsset = workflow.indexOf('- name: Download Windows assets');

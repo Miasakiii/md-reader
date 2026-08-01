@@ -154,8 +154,25 @@ jobs:
 
           Compress-Archive -Path $portableExe, "$releaseDir/使用说明.txt" -DestinationPath "$releaseDir/MD-Reader-$version-portable.zip" -Force
 
-          $setup = Get-ChildItem "src-tauri/target/release/bundle/nsis/*-setup.exe" | Select-Object -First 1
+          $setupCandidates = @(
+            Get-ChildItem "src-tauri/target/release/bundle/nsis" -File -Filter "*_${version}_*-setup.exe"
+          )
+          if ($setupCandidates.Count -ne 1) {
+            $candidateNames = ($setupCandidates | ForEach-Object Name) -join ", "
+            throw "Expected exactly one NSIS setup for version $version; found $($setupCandidates.Count): $candidateNames"
+          }
+          $setup = $setupCandidates[0]
           Copy-Item $setup.FullName "$releaseDir/MD-Reader-$version-setup.exe"
+
+      - name: Verify Windows release versions
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          ./scripts/verify-windows-release.ps1 `
+            -Version $version `
+            -SetupExe "release/v$version/MD-Reader-$version-setup.exe" `
+            -PortableExe "release/v$version/MD-Reader-$version-portable.exe"
 
       - name: Upload Windows release assets
         if: matrix.platform == 'windows-latest'
