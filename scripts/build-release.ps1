@@ -53,6 +53,11 @@ $ReadmeTxt = Join-Path $ReleaseDir "使用说明.txt"
 Copy-Item -Force $PortableSrc $PortableExe
 Copy-Item -Force $SetupSrc.FullName $SetupExe
 
+& (Join-Path $Root "scripts\verify-windows-release.ps1") `
+    -Version $Version `
+    -SetupExe $SetupExe `
+    -PortableExe $PortableExe
+
 @"
 MD Reader v$Version 便携版使用说明
 ================================
