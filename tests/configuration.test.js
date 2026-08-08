@@ -80,11 +80,11 @@ test('Tauri grants only the narrow window mutation needed for theme sync', () =>
   assert.deepEqual(windowMutationPermissions, ['core:window:allow-set-theme']);
 });
 
-test('the package test script uses the Node.js built-in test runner', () => {
+test('the package test script scopes Node.js test discovery to repository tests', () => {
   const packageJson = readProjectJson('package.json');
   const packageLock = readProjectJson('package-lock.json');
 
-  assert.equal(packageJson.scripts.test, 'node --test');
+  assert.equal(packageJson.scripts.test, 'node --test "tests/*.test.js"');
   assert.equal(packageJson.engines.node, '>=22');
   assert.deepEqual(packageLock.packages[''].engines, packageJson.engines);
 });
