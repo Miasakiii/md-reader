@@ -67,6 +67,14 @@
   background: var(--border-light);
 }
 
+.tool-btn:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+  background: transparent;
+  color: var(--text-muted);
+  transform: none;
+}
+
 .tool-btn svg {
   width: 17px;
   height: 17px;
@@ -229,11 +237,101 @@
 .plain-text {
   white-space: pre-wrap;
   word-wrap: break-word;
-  font-family: var(--font-serif);
-  font-size: 1rem;
-  line-height: var(--line-height);
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  line-height: 1.75;
   color: var(--text);
   margin: 0;
+}
+
+/* ===== Document Confirmation Dialogs ===== */
+.document-dialog {
+  width: min(460px, calc(100vw - 40px));
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--bg-card);
+  color: var(--text);
+  box-shadow: var(--shadow-lg);
+  margin: auto;
+}
+
+.document-dialog:not([open]) {
+  display: none;
+}
+
+.document-dialog.dialog-fallback-open {
+  display: block;
+  position: fixed;
+  inset: 50% auto auto 50%;
+  z-index: 1000;
+  max-height: calc(100vh - 40px);
+  margin: 0;
+  overflow-y: auto;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 0 0 100vmax rgba(16, 14, 12, 0.38), var(--shadow-lg);
+}
+
+.document-dialog::backdrop {
+  background: rgba(16, 14, 12, 0.38);
+  backdrop-filter: blur(3px);
+}
+
+.document-dialog-content {
+  padding: 24px;
+}
+
+.document-dialog h2 {
+  margin: 0 0 10px;
+  font-family: var(--font-sans);
+  font-size: 1.15rem;
+  line-height: 1.4;
+}
+
+.document-dialog p {
+  margin: 8px 0;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.document-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 22px;
+}
+
+.dialog-btn {
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font: 500 0.85rem var(--font-sans);
+  cursor: pointer;
+}
+
+.dialog-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.dialog-btn-primary {
+  border-color: var(--dialog-primary-bg);
+  background: var(--dialog-primary-bg);
+  color: #fff;
+}
+
+.dialog-btn-primary:hover {
+  background: var(--dialog-primary-hover);
+  color: #fff;
+}
+
+.dialog-btn-danger {
+  color: var(--dialog-danger);
 }
 
 /* ===== Markdown Typography — 优雅阅读排版 ===== */

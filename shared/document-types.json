@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "largeLogWarningBytes": 10485760,
+  "types": {
+    "markdown": {
+      "extensions": ["md", "markdown"],
+      "renderMode": "markdown",
+      "editable": true,
+      "toc": true,
+      "warnWhenLarge": false
+    },
+    "text": {
+      "extensions": ["txt", "tex"],
+      "renderMode": "plain",
+      "editable": true,
+      "toc": false,
+      "warnWhenLarge": false
+    },
+    "log": {
+      "extensions": ["log"],
+      "renderMode": "plain",
+      "editable": false,
+      "toc": false,
+      "warnWhenLarge": true
+    }
+  }
+}
