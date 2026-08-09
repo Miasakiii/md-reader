@@ -39,6 +39,15 @@ test('Tauri runs the frontend development and production build commands', () => 
   assert.equal(tauriConfig.build.beforeBuildCommand, 'npm run build');
 });
 
+test('Tauri keeps the main window hidden until persisted state is restored', () => {
+  const tauriConfig = readProjectJson('src-tauri/tauri.conf.json');
+  const mainWindow = tauriConfig.app.windows
+    .find(windowConfig => windowConfig.label === 'main');
+
+  assert.ok(mainWindow, 'expected a configured main window');
+  assert.equal(mainWindow.visible, false);
+});
+
 test('package, Cargo, and Tauri versions remain aligned', () => {
   const packageJson = readProjectJson('package.json');
   const tauriConfig = readProjectJson('src-tauri/tauri.conf.json');

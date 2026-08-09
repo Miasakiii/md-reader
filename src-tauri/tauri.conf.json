@@ -17,6 +17,7 @@
         "title": "MD Reader",
         "width": 1100,
         "height": 750,
+        "visible": false,
         "minWidth": 600,
         "minHeight": 400,
         "resizable": true,
