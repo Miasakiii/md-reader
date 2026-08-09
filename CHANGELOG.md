@@ -4,10 +4,12 @@
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-08-09
+
 ### Added
 
 - `.tex` 作为可编辑纯文本打开，保留原文，不执行 TeX 渲染或编译
-- `.log` 作为一次性只读快照打开并支持全文搜索；文件达到或超过 10 MiB 时读取前确认
+- `.log` 作为本地离线的一次性只读快照打开并支持全文搜索；10 MiB 是完整读取前的确认阈值，而非硬上限
 - `shared/document-types.json` 作为前端与 Rust 后端共同校验的文档类型策略，统一五种运行时扩展名（`.md`、`.markdown`、`.txt`、`.tex`、`.log`）及其渲染、编辑、目录和大文件能力
 - 文档切换保护：当前内容未保存时可选择“保存并继续 / 放弃修改 / 取消”，取消或保存失败不会读取目标文件
 - JavaScript/Rust 策略、只读、大日志竞态、文件关联与权限契约测试，以及持续集成检查
@@ -20,14 +22,17 @@
 - 浏览器预览与原生端一致采用严格 UTF-8 优先、GB18030 回退；无法识别的字节不会以替换字符静默打开
 - 原生读取不跟随最终链接；保存改为同目录临时文件完整写入、同步并原子替换，写入或替换失败时保留原文件
 - Node.js 开发基线提升为仍受支持的 22+，CI 使用 Node.js 24 LTS；普通检查和标签发布均使用锁文件、前端测试/构建、Rust 格式检查、测试与 Clippy
+- `npm test` 只运行仓库根目录的 `tests/*.test.js`，避免其他目录中的测试被误计入当前仓库结果
 - 标签发布校验 tag、应用版本与 CHANGELOG，并在验证门禁失败时停止发布
-- `package.json`、Cargo 与 Tauri 清单已同步为 1.2.0 候选；在远端 CI 和独立安装验收完成前继续保留为 Unreleased
+- `package.json`、Cargo 与 Tauri 清单统一为 1.2.0
 - Windows 本地发布脚本从 `package.json` 读取并校验版本，构建失败立即停止，且只打包唯一、版本精确匹配的 NSIS 产物
 
 ### Fixed
 
 - 切换浅色、深色和护眼主题时同步 Tauri 原生窗口栏；深色使用原生深色栏，浅色与护眼使用原生浅色栏
 - `npm run tauri dev/build` 现在分别自动启动 Vite 和构建前端，避免漏启开发服务器或打包旧 `dist`
+- macOS 文件打开事件队列改为安全借用路径，避免队列访问生命周期问题
+- Windows 启动时先恢复已保存的窗口尺寸和位置，再显示主窗口，避免默认大窗口短暂闪现
 
 ### Removed
 
@@ -84,7 +89,8 @@
 - 轻量级 Markdown 阅读器（Tauri 2）
 - 三种主题、目录导航、全文搜索、轻量编辑、阅读进度与窗口记忆
 
-[Unreleased]: https://github.com/Miasakiii/md-reader/compare/v1.1.2...HEAD
+[Unreleased]: https://github.com/Miasakiii/md-reader/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/Miasakiii/md-reader/compare/v1.1.2...v1.2.0
 [1.1.2]: https://github.com/Miasakiii/md-reader/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/Miasakiii/md-reader/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/Miasakiii/md-reader/compare/v1.0.0...v1.1.0
