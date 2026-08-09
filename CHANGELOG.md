@@ -33,6 +33,7 @@
 - `npm run tauri dev/build` 现在分别自动启动 Vite 和构建前端，避免漏启开发服务器或打包旧 `dist`
 - macOS 文件打开事件队列改为安全借用路径，避免队列访问生命周期问题
 - Windows 启动时先恢复已保存的窗口尺寸和位置，再显示主窗口，避免默认大窗口短暂闪现
+- 更新 DOMPurify、PostCSS 与 nanoid 至已修复版本，关闭发布前发现的依赖安全告警
 
 ### Removed
 
