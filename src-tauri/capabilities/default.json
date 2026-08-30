@@ -13,6 +13,14 @@
     "dialog:allow-ask",
     "dialog:allow-confirm",
     "dialog:allow-message",
-    "window-state:default"
+    "window-state:default",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        { "url": "https://*" },
+        { "url": "http://*" },
+        { "url": "mailto:*" }
+      ]
+    }
   ]
 }

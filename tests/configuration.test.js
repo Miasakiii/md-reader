@@ -206,3 +206,25 @@ test('the shared document type policy is valid JSON with unique extensions', () 
 
   assert.equal(new Set(extensions).size, extensions.length);
 });
+
+test('Tauri routes external links through a scope-limited opener permission', () => {
+  const capabilities = readProjectJson('src-tauri/capabilities/default.json');
+  const openerPermissions = capabilities.permissions
+    .filter(permission => {
+      const identifier = typeof permission === 'string' ? permission : permission?.identifier;
+
+      return identifier?.startsWith('opener:');
+    });
+
+  assert.deepEqual(openerPermissions, [{
+    identifier: 'opener:allow-open-url',
+    allow: [
+      { url: 'https://*' },
+      { url: 'http://*' },
+      { url: 'mailto:*' },
+    ],
+  }]);
+
+  const cargoToml = readProjectFile('src-tauri/Cargo.toml');
+  assert.match(cargoToml, /^tauri-plugin-opener = "2"$/m);
+});

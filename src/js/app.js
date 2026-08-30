@@ -23,6 +23,11 @@ import {
 } from './document-session.js';
 import { readBrowserTextFile } from './text-decoding.js';
 import {
+  classifyLinkHref,
+  createOpenExternal,
+  handleRenderedLinkClick,
+} from './link-router.js';
+import {
   createNativeWindowThemeSynchronizer,
   getNativeWindowTheme,
 } from './window-theme.js';
@@ -173,6 +178,19 @@ const syncNativeWindowTheme = createNativeWindowThemeSynchronizer({
   },
   onError: error => {
     console.warn('Native window theme sync failed:', error?.message || error);
+  },
+});
+
+const openExternalUrl = createOpenExternal({
+  isTauriAvailable: () => tauriAvailable,
+  invoke: async (command, args) => {
+    const invoke = await getTauriInvoke();
+    return invoke(command, args);
+  },
+  browserOpen: url => window.open(url, '_blank', 'noopener,noreferrer'),
+  onError: error => {
+    console.warn('External link open failed:', error?.message || error);
+    showToast(describeAppError(error, '无法打开链接'));
   },
 });
 
@@ -1324,7 +1342,14 @@ els.editorTextarea.addEventListener('scroll', () => {
 els.btnOpen.addEventListener('click', openFile);
 els.markdownBody.addEventListener('click', e => {
   const btn = e.target instanceof Element ? e.target.closest('.code-copy') : null;
-  if (btn) copyCode(btn);
+  if (btn) {
+    copyCode(btn);
+    return;
+  }
+  handleRenderedLinkClick(e, {
+    classify: classifyLinkHref,
+    openExternal: openExternalUrl,
+  });
 });
 els.btnSave.addEventListener('click', saveFile);
 els.btnMode.addEventListener('click', toggleEditMode);

@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- 文档内 `http`/`https` 与 `mailto` 链接交给系统默认程序打开，WebView 不再被外链导航占用；本地文档链接与未知协议保持拦截不导航，浏览器预览降级为带 `noopener` 的安全新窗口
+
 ### Fixed
 
 - Windows 最近文件与阅读进度存储改用 Tauri canonical `app_config_dir`；旧目录中的 `recent.json` / `progress.json` 按原始字节迁移，canonical 冲突时隔离为 `*.legacy.json`，并通过可注入存储路径测试避免读写回旧目录

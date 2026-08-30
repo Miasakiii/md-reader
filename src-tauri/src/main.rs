@@ -533,6 +533,7 @@ fn main() {
     tauri::Builder::default()
         .manage(CliArgs(Mutex::new(OpenFileQueue::new(initial_args))))
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .plugin(
             tauri_plugin_window_state::Builder::new()
                 .with_filename("window-state.json")
