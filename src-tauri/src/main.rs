@@ -10,7 +10,8 @@ use std::io::{ErrorKind, Read};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
-use tauri::{Emitter, Manager};
+use tauri::Emitter;
+use tauri::Manager;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -41,13 +42,92 @@ struct ReadingProgress {
     scroll_pct: f64,
 }
 
-/// 获取配置目录
-fn config_dir() -> PathBuf {
-    let dir = dirs::config_dir()
+#[derive(Debug, Clone)]
+struct StoragePaths {
+    config_dir: PathBuf,
+}
+
+impl StoragePaths {
+    fn new(config_dir: PathBuf) -> Self {
+        Self { config_dir }
+    }
+
+    fn recent_file(&self) -> PathBuf {
+        self.config_dir.join("recent.json")
+    }
+
+    fn progress_file(&self) -> PathBuf {
+        self.config_dir.join("progress.json")
+    }
+}
+
+fn legacy_config_dir() -> PathBuf {
+    dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("md-reader");
-    fs::create_dir_all(&dir).ok();
-    dir
+        .join("md-reader")
+}
+
+#[cfg(any(not(target_os = "windows"), test))]
+fn legacy_storage_paths(config_dir: PathBuf) -> StoragePaths {
+    let _ = fs::create_dir_all(&config_dir).ok();
+    StoragePaths::new(config_dir)
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn migrate_storage_files(legacy_dir: &Path, canonical_dir: &Path) -> std::io::Result<()> {
+    const STORAGE_FILES: [(&str, &str); 2] = [
+        ("recent.json", "recent.legacy.json"),
+        ("progress.json", "progress.legacy.json"),
+    ];
+
+    fs::create_dir_all(canonical_dir)?;
+    if !legacy_dir.try_exists()? {
+        return Ok(());
+    }
+
+    let mut moves = Vec::new();
+    for (file_name, legacy_file_name) in STORAGE_FILES {
+        let source = legacy_dir.join(file_name);
+        if !source.try_exists()? {
+            continue;
+        }
+
+        let canonical = canonical_dir.join(file_name);
+        let destination = if canonical.try_exists()? {
+            let quarantine = canonical_dir.join(legacy_file_name);
+            if quarantine.try_exists()? {
+                return Err(std::io::Error::new(
+                    ErrorKind::AlreadyExists,
+                    format!(
+                        "cannot migrate {} because quarantine target already exists: {}",
+                        source.display(),
+                        quarantine.display()
+                    ),
+                ));
+            }
+            quarantine
+        } else {
+            canonical
+        };
+        moves.push((source, destination));
+    }
+
+    for (source, destination) in moves {
+        fs::rename(source, destination)?;
+    }
+
+    match fs::remove_dir(legacy_dir) {
+        Ok(()) => Ok(()),
+        Err(error)
+            if matches!(
+                error.kind(),
+                ErrorKind::NotFound | ErrorKind::DirectoryNotEmpty
+            ) =>
+        {
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
 }
 
 fn metadata_error(path: &Path, error: std::io::Error) -> BackendError {
@@ -196,10 +276,24 @@ where
     Ok(data)
 }
 
+fn read_file_at(
+    path: String,
+    allow_large_log: bool,
+    storage_paths: &StoragePaths,
+) -> Result<FileData, BackendError> {
+    read_file_with_registration(path, allow_large_log, |opened_path| {
+        save_recent_file(storage_paths, opened_path);
+    })
+}
+
 /// 读取文件内容（UTF-8 优先，失败时尝试 GB18030/GBK）。
 #[tauri::command]
-fn read_file(path: String, allow_large_log: bool) -> Result<FileData, BackendError> {
-    read_file_with_registration(path, allow_large_log, save_recent_file)
+fn read_file(
+    path: String,
+    allow_large_log: bool,
+    storage_paths: tauri::State<'_, StoragePaths>,
+) -> Result<FileData, BackendError> {
+    read_file_at(path, allow_large_log, storage_paths.inner())
 }
 
 /// 保存文件内容
@@ -243,9 +337,12 @@ fn save_file(path: String, content: String) -> Result<(), BackendError> {
 }
 
 /// 保存阅读进度
-#[tauri::command]
-fn save_reading_progress(path: String, scroll_pct: f64) -> Result<(), String> {
-    let progress_file = config_dir().join("progress.json");
+fn save_reading_progress_at(
+    storage_paths: &StoragePaths,
+    path: String,
+    scroll_pct: f64,
+) -> Result<(), String> {
+    let progress_file = storage_paths.progress_file();
     let mut map: std::collections::HashMap<String, ReadingProgress> = if progress_file.exists() {
         serde_json::from_str(&fs::read_to_string(&progress_file).unwrap_or_default())
             .unwrap_or_default()
@@ -266,10 +363,18 @@ fn save_reading_progress(path: String, scroll_pct: f64) -> Result<(), String> {
     Ok(())
 }
 
-/// 读取阅读进度
 #[tauri::command]
-fn load_reading_progress(path: String) -> ReadingProgress {
-    let progress_file = config_dir().join("progress.json");
+fn save_reading_progress(
+    path: String,
+    scroll_pct: f64,
+    storage_paths: tauri::State<'_, StoragePaths>,
+) -> Result<(), String> {
+    save_reading_progress_at(storage_paths.inner(), path, scroll_pct)
+}
+
+/// 读取阅读进度
+fn load_reading_progress_at(storage_paths: &StoragePaths, path: String) -> ReadingProgress {
+    let progress_file = storage_paths.progress_file();
     if !progress_file.exists() {
         return ReadingProgress::default();
     }
@@ -277,6 +382,14 @@ fn load_reading_progress(path: String) -> ReadingProgress {
         serde_json::from_str(&fs::read_to_string(&progress_file).unwrap_or_default())
             .unwrap_or_default();
     map.get(&path).cloned().unwrap_or_default()
+}
+
+#[tauri::command]
+fn load_reading_progress(
+    path: String,
+    storage_paths: tauri::State<'_, StoragePaths>,
+) -> ReadingProgress {
+    load_reading_progress_at(storage_paths.inner(), path)
 }
 
 /// 保存最近文件列表
@@ -298,8 +411,8 @@ fn save_recent_file_at(recent_file: &Path, path: &str) -> Result<(), std::io::Er
     fs::write(recent_file, json)
 }
 
-fn save_recent_file(path: &str) {
-    let recent_file = config_dir().join("recent.json");
+fn save_recent_file(storage_paths: &StoragePaths, path: &str) {
+    let recent_file = storage_paths.recent_file();
     let _ = save_recent_file_at(&recent_file, path);
 }
 
@@ -401,13 +514,17 @@ fn get_cli_args(state: tauri::State<CliArgs>) -> Vec<String> {
 }
 
 /// 获取最近文件列表
-#[tauri::command]
-fn get_recent_files() -> Vec<String> {
-    let recent_file = config_dir().join("recent.json");
+fn get_recent_files_at(storage_paths: &StoragePaths) -> Vec<String> {
+    let recent_file = storage_paths.recent_file();
     if !recent_file.exists() {
         return Vec::new();
     }
     serde_json::from_str(&fs::read_to_string(&recent_file).unwrap_or_default()).unwrap_or_default()
+}
+
+#[tauri::command]
+fn get_recent_files(storage_paths: tauri::State<'_, StoragePaths>) -> Vec<String> {
+    get_recent_files_at(storage_paths.inner())
 }
 
 fn main() {
@@ -421,6 +538,20 @@ fn main() {
                 .with_filename("window-state.json")
                 .build(),
         )
+        .setup(|app| {
+            #[cfg(target_os = "windows")]
+            let storage_paths = {
+                let canonical_dir = app.path().app_config_dir()?;
+                migrate_storage_files(&legacy_config_dir(), &canonical_dir)?;
+                StoragePaths::new(canonical_dir)
+            };
+
+            #[cfg(not(target_os = "windows"))]
+            let storage_paths = legacy_storage_paths(legacy_config_dir());
+
+            app.manage(storage_paths);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             inspect_document,
             read_file,
@@ -847,5 +978,225 @@ mod tests {
             queue_or_emit_open_file(&cli_args, after_ready.clone()),
             Some(after_ready)
         );
+    }
+
+    #[test]
+    fn legacy_storage_paths_returns_selected_path_after_directory_creation_failure() {
+        let directory = TestDirectory::new("legacy-storage-create-failure");
+        let occupied_path = directory.path("legacy");
+        fs::write(&occupied_path, b"not a directory").unwrap();
+
+        let storage_paths = legacy_storage_paths(occupied_path.clone());
+
+        assert_eq!(storage_paths.config_dir, occupied_path);
+        assert!(storage_paths.config_dir.is_file());
+    }
+
+    #[test]
+    fn migration_moves_both_storage_files_without_changing_bytes() {
+        let directory = TestDirectory::new("migrate-both");
+        let legacy = directory.path("legacy");
+        let canonical = directory.path("canonical");
+        fs::create_dir(&legacy).unwrap();
+        let recent_bytes = b"[\x00legacy recent bytes\xff]";
+        let progress_bytes = b"{\x00legacy progress bytes\xff}";
+        fs::write(legacy.join("recent.json"), recent_bytes).unwrap();
+        fs::write(legacy.join("progress.json"), progress_bytes).unwrap();
+
+        migrate_storage_files(&legacy, &canonical).unwrap();
+
+        assert_eq!(
+            fs::read(canonical.join("recent.json")).unwrap(),
+            recent_bytes
+        );
+        assert_eq!(
+            fs::read(canonical.join("progress.json")).unwrap(),
+            progress_bytes
+        );
+        assert!(!legacy.exists());
+    }
+
+    #[test]
+    fn migration_moves_a_single_storage_file() {
+        let directory = TestDirectory::new("migrate-single");
+        let legacy = directory.path("legacy");
+        let canonical = directory.path("canonical");
+        fs::create_dir(&legacy).unwrap();
+        fs::write(legacy.join("recent.json"), b"recent only").unwrap();
+
+        migrate_storage_files(&legacy, &canonical).unwrap();
+
+        assert_eq!(
+            fs::read(canonical.join("recent.json")).unwrap(),
+            b"recent only"
+        );
+        assert!(!canonical.join("progress.json").exists());
+        assert!(!legacy.exists());
+    }
+
+    #[test]
+    fn migration_without_legacy_prepares_an_empty_canonical_directory() {
+        let directory = TestDirectory::new("migrate-no-legacy");
+        let legacy = directory.path("missing-legacy");
+        let canonical = directory.path("canonical");
+
+        migrate_storage_files(&legacy, &canonical).unwrap();
+
+        assert!(canonical.is_dir());
+        assert!(!legacy.exists());
+        assert!(fs::read_dir(&canonical).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn migration_is_idempotent_after_success() {
+        let directory = TestDirectory::new("migrate-idempotent");
+        let legacy = directory.path("legacy");
+        let canonical = directory.path("canonical");
+        fs::create_dir(&legacy).unwrap();
+        fs::write(legacy.join("progress.json"), b"progress bytes").unwrap();
+
+        migrate_storage_files(&legacy, &canonical).unwrap();
+        migrate_storage_files(&legacy, &canonical).unwrap();
+
+        assert_eq!(
+            fs::read(canonical.join("progress.json")).unwrap(),
+            b"progress bytes"
+        );
+        assert!(!legacy.exists());
+    }
+
+    #[test]
+    fn migration_quarantines_legacy_file_when_canonical_conflicts() {
+        let directory = TestDirectory::new("migrate-conflict");
+        let legacy = directory.path("legacy");
+        let canonical = directory.path("canonical");
+        fs::create_dir(&legacy).unwrap();
+        fs::create_dir(&canonical).unwrap();
+        fs::write(legacy.join("recent.json"), b"legacy recent").unwrap();
+        fs::write(canonical.join("recent.json"), b"canonical recent").unwrap();
+
+        migrate_storage_files(&legacy, &canonical).unwrap();
+
+        assert_eq!(
+            fs::read(canonical.join("recent.json")).unwrap(),
+            b"canonical recent"
+        );
+        assert_eq!(
+            fs::read(canonical.join("recent.legacy.json")).unwrap(),
+            b"legacy recent"
+        );
+        assert!(!legacy.exists());
+    }
+
+    #[test]
+    fn migration_preflights_existing_quarantine_before_any_rename() {
+        let directory = TestDirectory::new("migrate-preflight");
+        let legacy = directory.path("legacy");
+        let canonical = directory.path("canonical");
+        fs::create_dir(&legacy).unwrap();
+        fs::create_dir(&canonical).unwrap();
+        fs::write(legacy.join("recent.json"), b"legacy recent").unwrap();
+        fs::write(legacy.join("progress.json"), b"legacy progress").unwrap();
+        fs::write(canonical.join("progress.json"), b"canonical progress").unwrap();
+        fs::write(
+            canonical.join("progress.legacy.json"),
+            b"existing quarantine",
+        )
+        .unwrap();
+
+        let error = migrate_storage_files(&legacy, &canonical).unwrap_err();
+
+        assert_eq!(error.kind(), ErrorKind::AlreadyExists);
+        assert_eq!(
+            fs::read(legacy.join("recent.json")).unwrap(),
+            b"legacy recent"
+        );
+        assert_eq!(
+            fs::read(legacy.join("progress.json")).unwrap(),
+            b"legacy progress"
+        );
+        assert!(!canonical.join("recent.json").exists());
+        assert_eq!(
+            fs::read(canonical.join("progress.json")).unwrap(),
+            b"canonical progress"
+        );
+        assert_eq!(
+            fs::read(canonical.join("progress.legacy.json")).unwrap(),
+            b"existing quarantine"
+        );
+    }
+
+    #[test]
+    fn migration_leaves_unknown_files_and_the_legacy_directory_in_place() {
+        let directory = TestDirectory::new("migrate-unknown");
+        let legacy = directory.path("legacy");
+        let canonical = directory.path("canonical");
+        fs::create_dir(&legacy).unwrap();
+        fs::write(legacy.join("recent.json"), b"recent bytes").unwrap();
+        fs::write(legacy.join("keep.me"), b"unknown bytes").unwrap();
+
+        migrate_storage_files(&legacy, &canonical).unwrap();
+
+        assert_eq!(
+            fs::read(canonical.join("recent.json")).unwrap(),
+            b"recent bytes"
+        );
+        assert_eq!(fs::read(legacy.join("keep.me")).unwrap(), b"unknown bytes");
+        assert!(legacy.is_dir());
+    }
+
+    #[test]
+    fn progress_and_recent_helpers_only_use_the_injected_storage_paths() {
+        let directory = TestDirectory::new("injected-storage");
+        let legacy = directory.path("legacy");
+        let canonical = directory.path("canonical");
+        fs::create_dir(&legacy).unwrap();
+        fs::create_dir(&canonical).unwrap();
+        let legacy_progress = br#"{"legacy.md":{"scroll_top":9.0,"scroll_pct":0.9}}"#;
+        let legacy_recent = br#"["legacy.md"]"#;
+        fs::write(legacy.join("progress.json"), legacy_progress).unwrap();
+        fs::write(legacy.join("recent.json"), legacy_recent).unwrap();
+        let storage_paths = StoragePaths::new(canonical.clone());
+
+        save_reading_progress_at(&storage_paths, "canonical.md".to_string(), 0.75).unwrap();
+        save_recent_file(&storage_paths, "canonical.md");
+
+        let progress = load_reading_progress_at(&storage_paths, "canonical.md".to_string());
+        assert_eq!(progress.scroll_top, 0.0);
+        assert_eq!(progress.scroll_pct, 0.75);
+        assert_eq!(get_recent_files_at(&storage_paths), vec!["canonical.md"]);
+        assert_eq!(
+            fs::read(legacy.join("progress.json")).unwrap(),
+            legacy_progress
+        );
+        assert_eq!(fs::read(legacy.join("recent.json")).unwrap(), legacy_recent);
+        assert_eq!(
+            storage_paths.progress_file(),
+            canonical.join("progress.json")
+        );
+        assert_eq!(storage_paths.recent_file(), canonical.join("recent.json"));
+    }
+
+    #[test]
+    fn successful_read_registers_only_the_injected_canonical_recent_file() {
+        let directory = TestDirectory::new("read-canonical-recent");
+        let legacy = directory.path("legacy");
+        let canonical = directory.path("canonical");
+        fs::create_dir(&legacy).unwrap();
+        fs::create_dir(&canonical).unwrap();
+        let legacy_recent = br#"["legacy.md"]"#;
+        fs::write(legacy.join("recent.json"), legacy_recent).unwrap();
+        let document = directory.path("paper.md");
+        fs::write(&document, b"# canonical recent").unwrap();
+        let storage_paths = StoragePaths::new(canonical.clone());
+
+        let data = read_file_at(path_string(&document), false, &storage_paths).unwrap();
+
+        assert_eq!(data.path, path_string(&document));
+        assert_eq!(
+            read_recent_file(&canonical.join("recent.json")),
+            vec![path_string(&document)]
+        );
+        assert_eq!(fs::read(legacy.join("recent.json")).unwrap(), legacy_recent);
     }
 }

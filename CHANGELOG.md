@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Windows 最近文件与阅读进度存储改用 Tauri canonical `app_config_dir`；旧目录中的 `recent.json` / `progress.json` 按原始字节迁移，canonical 冲突时隔离为 `*.legacy.json`，并通过可注入存储路径测试避免读写回旧目录
+
 ## [1.2.0] - 2026-08-09
 
 ### Added
