@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-08-30
+
 ### Added
 
 - 文档内 `http`/`https` 与 `mailto` 链接交给系统默认程序打开，WebView 不再被外链导航占用；本地文档链接与未知协议保持拦截不导航，浏览器预览降级为带 `noopener` 的安全新窗口
@@ -111,7 +113,8 @@
 - 轻量级 Markdown 阅读器（Tauri 2）
 - 三种主题、目录导航、全文搜索、轻量编辑、阅读进度与窗口记忆
 
-[Unreleased]: https://github.com/Miasakiii/md-reader/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/Miasakiii/md-reader/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/Miasakiii/md-reader/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/Miasakiii/md-reader/compare/v1.1.2...v1.2.0
 [1.1.2]: https://github.com/Miasakiii/md-reader/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/Miasakiii/md-reader/compare/v1.1.0...v1.1.1
