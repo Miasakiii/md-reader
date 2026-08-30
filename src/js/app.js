@@ -1448,6 +1448,9 @@ els.editorTextarea.addEventListener('scroll', () => {
 // ========== Event Bindings ==========
 els.btnOpen.addEventListener('click', openFile);
 els.btnLibrary.addEventListener('click', toggleLibrary);
+els.libraryRetry.addEventListener('click', () => {
+  void loadLibraryFiles();
+});
 els.markdownBody.addEventListener('click', e => {
   const btn = e.target instanceof Element ? e.target.closest('.code-copy') : null;
   if (btn) {
