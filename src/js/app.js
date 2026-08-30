@@ -23,6 +23,12 @@ import {
 } from './document-session.js';
 import { readBrowserTextFile } from './text-decoding.js';
 import {
+  createFileLibraryView,
+  nextSidePanel,
+  validateLibraryPaths,
+  welcomePaths,
+} from './file-library.js';
+import {
   classifyLinkHref,
   createOpenExternal,
   handleRenderedLinkClick,
@@ -78,12 +84,14 @@ const state = {
   isEditMode: false,
   theme: 'light',
   fontSize: 16,
-  tocVisible: false,
+  activeSidePanel: 'none',
   searchVisible: false,
   searchResults: [],
   searchIndex: -1,
   scrollSaveTimer: null,
-  recentFiles: [],
+  libraryFiles: [],
+  libraryError: '',
+  platform: /Win/i.test(globalThis.navigator?.platform ?? '') ? 'windows' : 'posix',
 };
 
 const themes = ['light', 'dark', 'sepia'];
@@ -92,8 +100,8 @@ const themeLabels = { light: '浅色', dark: '深色', sepia: '护眼' };
 // ========== DOM Elements ==========
 const $ = id => document.getElementById(id);
 const els = {
-  toolbar: $('toolbar'),
   btnOpen: $('btn-open'),
+  btnLibrary: $('btn-library'),
   btnToc: $('btn-toc'),
   btnSearch: $('btn-search'),
   btnMode: $('btn-mode'),
@@ -129,7 +137,25 @@ const els = {
   largeLogDialog: $('large-log-dialog'),
   largeLogFileName: $('large-log-file-name'),
   largeLogFileSize: $('large-log-file-size'),
+  libraryPanel: $('library-panel'),
+  libraryList: $('library-list'),
+  libraryEmpty: $('library-empty'),
+  libraryError: $('library-error'),
+  libraryErrorText: $('library-error-text'),
+  libraryRetry: $('library-retry'),
+  fileContextMenu: $('file-context-menu'),
 };
+
+const fileLibraryView = createFileLibraryView({
+  listElement: els.libraryList,
+  scrollElement: els.libraryPanel,
+  emptyElement: els.libraryEmpty,
+  menuElement: els.fileContextMenu,
+  platform: state.platform,
+  onOpen: path => openLibraryFile(path),
+  onRemove: path => removeLibraryFile(path),
+  onError: error => showToast(describeAppError(error, '文件目录操作失败')),
+});
 
 // ========== Tauri Bridge ==========
 let tauriAvailable = false;
@@ -519,22 +545,82 @@ function copyCode(btn) {
   });
 }
 
-// ========== Recent Files ==========
-async function loadRecentFiles() {
+// ========== File Library ==========
+async function loadLibraryFiles() {
   if (!tauriAvailable) return;
   try {
-    state.recentFiles = await tauriInvoke('get_recent_files');
-    renderWelcome();
-  } catch {}
+    state.libraryFiles = validateLibraryPaths(await tauriInvoke('get_library_files'));
+    state.libraryError = '';
+  } catch (error) {
+    state.libraryError = describeAppError(error, '文件目录加载失败');
+  }
+  renderLibrarySidebar();
+  renderWelcome();
+}
+
+function renderLibrarySidebar() {
+  els.libraryError.classList.toggle('hidden', !state.libraryError);
+  els.libraryErrorText.textContent = state.libraryError;
+  try {
+    fileLibraryView.render(state.libraryFiles, state.filePath);
+  } catch (error) {
+    state.libraryError = error?.message || String(error);
+    els.libraryError.classList.remove('hidden');
+    els.libraryErrorText.textContent = state.libraryError;
+  }
+}
+
+async function registerOpenedDocument(path) {
+  if (!tauriAvailable) return;
+  try {
+    state.libraryFiles = await tauriInvoke('register_library_file', { path });
+    state.libraryError = '';
+    renderLibrarySidebar();
+  } catch (error) {
+    showToast(describeAppError(error, '文件目录登记失败'), 'info');
+  }
+}
+
+async function removeLibraryFile(path) {
+  if (!tauriAvailable) return;
+  try {
+    state.libraryFiles = await tauriInvoke('remove_library_file', { path });
+    state.libraryError = '';
+  } catch (error) {
+    showToast(describeAppError(error, '移出文件目录失败'));
+    return;
+  }
+  renderLibrarySidebar();
+  renderWelcome();
+}
+
+async function openLibraryFile(path) {
+  if (documentInteractionLocked()) {
+    showToast('文档操作正在进行，请稍候', 'info');
+    return false;
+  }
+  const opened = await openFileByPath(path);
+  if (!opened && tauriAvailable) {
+    try {
+      const status = await tauriInvoke('document_path_status', { path });
+      if (status === 'missing') {
+        showToast('文件已不存在，已从文件目录移除', 'info');
+        await removeLibraryFile(path);
+      }
+    } catch {
+      // 无法确认状态时保留记录，不自动清理。
+    }
+  }
+  return opened;
 }
 
 function renderWelcome() {
   if (state.filePath) return;
 
-  const recentHtml = state.recentFiles.length > 0
+  const recentHtml = state.libraryFiles.length > 0
     ? `<div class="welcome-recent">
         <div class="welcome-recent-title">最近打开</div>
-        ${state.recentFiles.slice(0, 8).map(path => {
+        ${welcomePaths(state.libraryFiles).map(path => {
           const name = path.split(/[/\\]/).pop();
           return `<button type="button" class="recent-item" data-path="${escapeHtml(path)}">
             <div class="recent-item-name">${escapeHtml(name)}</div>
@@ -720,10 +806,10 @@ function applyDocumentControls() {
   els.btnToc.disabled = viewState.tocDisabled || controlsLocked;
   els.editorTextarea.disabled = viewState.editorDisabled || state.documentSwitchPending;
   els.main.setAttribute('aria-busy', String(controlsLocked));
-  if (viewState.tocDisabled) {
-    state.tocVisible = false;
-    els.tocPanel.classList.add('hidden');
+  if (viewState.tocDisabled && state.activeSidePanel === 'toc') {
+    state.activeSidePanel = 'none';
   }
+  renderSidePanels();
 
   els.btnMode.title = state.readOnly
     ? 'LOG 文件以只读模式打开'
@@ -786,7 +872,7 @@ async function performDocumentOpen({
   path,
   inspectDocument,
   readDocument,
-  refreshRecentFiles,
+  refreshLibraryFiles,
   nativeFile,
 }) {
   const focusBeforeSwitch = document.activeElement;
@@ -807,7 +893,9 @@ async function performDocumentOpen({
 
     if (state.filePath) await saveProgress();
     applyOpenedDocument(result.document, { nativeFile });
-    if (refreshRecentFiles) await loadRecentFiles();
+    if (refreshLibraryFiles && nativeFile) {
+      await registerOpenedDocument(result.document.path);
+    }
     await loadProgress();
     opened = true;
     return true;
@@ -838,7 +926,7 @@ function openFileByPath(path) {
       path: targetPath,
       allowLargeLog,
     }),
-    refreshRecentFiles: true,
+    refreshLibraryFiles: true,
     nativeFile: true,
   }));
 }
@@ -848,7 +936,7 @@ function openBrowserFile(file) {
     path: file.name,
     inspectDocument: async () => browserInspection(file),
     readDocument: async (_path, allowLargeLog) => readBrowserDocument(file, allowLargeLog),
-    refreshRecentFiles: false,
+    refreshLibraryFiles: false,
     nativeFile: false,
   }));
 }
@@ -1023,7 +1111,26 @@ function loadFontSize() {
   }
 }
 
-// ========== TOC ==========
+// ========== Side Panels ==========
+function renderSidePanels() {
+  const panel = state.activeSidePanel;
+  els.libraryPanel.classList.toggle('hidden', panel !== 'library');
+  els.tocPanel.classList.toggle('hidden', panel !== 'toc');
+  els.btnLibrary.classList.toggle('active', panel === 'library');
+  els.btnToc.classList.toggle('active', panel === 'toc');
+  els.btnLibrary.setAttribute('aria-expanded', panel === 'library' ? 'true' : 'false');
+  els.btnToc.setAttribute('aria-expanded', panel === 'toc' ? 'true' : 'false');
+}
+
+function toggleLibrary() {
+  if (documentInteractionLocked()) {
+    showToast('文档操作正在进行，请稍候', 'info');
+    return;
+  }
+  state.activeSidePanel = nextSidePanel(state.activeSidePanel, 'library');
+  renderSidePanels();
+}
+
 function toggleTOC() {
   if (documentInteractionLocked()) {
     showToast('文档操作正在进行，请稍候', 'info');
@@ -1033,8 +1140,8 @@ function toggleTOC() {
     showToast('纯文本文档不提供目录', 'info');
     return;
   }
-  state.tocVisible = !state.tocVisible;
-  els.tocPanel.classList.toggle('hidden', !state.tocVisible);
+  state.activeSidePanel = nextSidePanel(state.activeSidePanel, 'toc');
+  renderSidePanels();
 }
 
 els.tocContent.addEventListener('click', e => {
@@ -1340,6 +1447,7 @@ els.editorTextarea.addEventListener('scroll', () => {
 
 // ========== Event Bindings ==========
 els.btnOpen.addEventListener('click', openFile);
+els.btnLibrary.addEventListener('click', toggleLibrary);
 els.markdownBody.addEventListener('click', e => {
   const btn = e.target instanceof Element ? e.target.closest('.code-copy') : null;
   if (btn) {
@@ -1375,7 +1483,7 @@ async function init() {
   await initTauri();
   void syncNativeWindowTheme(state.theme);
   await initDragDrop();
-  await loadRecentFiles();
+  await loadLibraryFiles();
 
   if (tauriAvailable) {
     try {

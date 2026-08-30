@@ -1,7 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod file_types;
+mod library;
 mod safe_file;
+mod storage;
 
 use file_types::{BackendError, DocumentKind, DocumentType, RenderMode};
 use serde::{Deserialize, Serialize};
@@ -9,7 +11,7 @@ use std::fs;
 use std::io::{ErrorKind, Read};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-#[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
+#[cfg(any(desktop, target_os = "ios", target_os = "android"))]
 use tauri::Emitter;
 use tauri::Manager;
 
@@ -50,10 +52,6 @@ struct StoragePaths {
 impl StoragePaths {
     fn new(config_dir: PathBuf) -> Self {
         Self { config_dir }
-    }
-
-    fn recent_file(&self) -> PathBuf {
-        self.config_dir.join("recent.json")
     }
 
     fn progress_file(&self) -> PathBuf {
@@ -263,37 +261,10 @@ fn read_document(path: String, allow_large_log: bool) -> Result<FileData, Backen
     })
 }
 
-fn read_file_with_registration<F>(
-    path: String,
-    allow_large_log: bool,
-    register_recent: F,
-) -> Result<FileData, BackendError>
-where
-    F: FnOnce(&str),
-{
-    let data = read_document(path, allow_large_log)?;
-    register_recent(&data.path);
-    Ok(data)
-}
-
-fn read_file_at(
-    path: String,
-    allow_large_log: bool,
-    storage_paths: &StoragePaths,
-) -> Result<FileData, BackendError> {
-    read_file_with_registration(path, allow_large_log, |opened_path| {
-        save_recent_file(storage_paths, opened_path);
-    })
-}
-
 /// 读取文件内容（UTF-8 优先，失败时尝试 GB18030/GBK）。
 #[tauri::command]
-fn read_file(
-    path: String,
-    allow_large_log: bool,
-    storage_paths: tauri::State<'_, StoragePaths>,
-) -> Result<FileData, BackendError> {
-    read_file_at(path, allow_large_log, storage_paths.inner())
+fn read_file(path: String, allow_large_log: bool) -> Result<FileData, BackendError> {
+    read_document(path, allow_large_log)
 }
 
 /// 保存文件内容
@@ -392,30 +363,6 @@ fn load_reading_progress(
     load_reading_progress_at(storage_paths.inner(), path)
 }
 
-/// 保存最近文件列表
-fn save_recent_file_at(recent_file: &Path, path: &str) -> Result<(), std::io::Error> {
-    let mut list: Vec<String> = if recent_file.exists() {
-        serde_json::from_str(&fs::read_to_string(recent_file).unwrap_or_default())
-            .unwrap_or_default()
-    } else {
-        Vec::new()
-    };
-
-    // 去重，移到最前
-    list.retain(|p| p != path);
-    list.insert(0, path.to_string());
-    list.truncate(20); // 最多保留 20 个
-
-    let json = serde_json::to_string_pretty(&list)
-        .map_err(|error| std::io::Error::new(ErrorKind::InvalidData, error))?;
-    fs::write(recent_file, json)
-}
-
-fn save_recent_file(storage_paths: &StoragePaths, path: &str) {
-    let recent_file = storage_paths.recent_file();
-    let _ = save_recent_file_at(&recent_file, path);
-}
-
 #[derive(Debug)]
 struct OpenFileQueue {
     pending: Vec<String>,
@@ -476,7 +423,7 @@ fn normalize_file_path(raw: &str) -> String {
     path
 }
 
-fn collect_file_args<I>(args: I) -> Vec<String>
+fn collect_file_args<I>(args: I, base_dir: &Path) -> Vec<String>
 where
     I: IntoIterator<Item = String>,
 {
@@ -485,7 +432,14 @@ where
         if maybe_file.starts_with('-') {
             continue;
         }
-        let path = normalize_file_path(&maybe_file);
+        let normalized = normalize_file_path(&maybe_file);
+        // 相对路径按传入进程的工作目录绝对化；不使用 canonicalize，
+        // 避免 Windows 的 \\?\ 前缀破坏与文件库路径的可比性。
+        let path = if Path::new(&normalized).is_absolute() {
+            normalized
+        } else {
+            base_dir.join(&normalized).to_string_lossy().into_owned()
+        };
         if is_openable_document_path(Path::new(&path)) {
             files.push(path);
         }
@@ -494,10 +448,11 @@ where
 }
 
 fn collect_cli_file_args() -> Vec<String> {
-    collect_file_args(std::env::args().skip(1))
+    let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    collect_file_args(std::env::args().skip(1), &current_dir)
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
+#[cfg(any(desktop, target_os = "ios", target_os = "android"))]
 fn emit_file_opened(app: &tauri::AppHandle, path: String) {
     if !is_openable_document_path(Path::new(&path)) {
         return;
@@ -513,25 +468,28 @@ fn get_cli_args(state: tauri::State<CliArgs>) -> Vec<String> {
     state.0.lock().unwrap().take_pending_and_mark_ready()
 }
 
-/// 获取最近文件列表
-fn get_recent_files_at(storage_paths: &StoragePaths) -> Vec<String> {
-    let recent_file = storage_paths.recent_file();
-    if !recent_file.exists() {
-        return Vec::new();
-    }
-    serde_json::from_str(&fs::read_to_string(&recent_file).unwrap_or_default()).unwrap_or_default()
-}
-
-#[tauri::command]
-fn get_recent_files(storage_paths: tauri::State<'_, StoragePaths>) -> Vec<String> {
-    get_recent_files_at(storage_paths.inner())
-}
-
 fn main() {
     let initial_args = collect_cli_file_args();
 
-    tauri::Builder::default()
-        .manage(CliArgs(Mutex::new(OpenFileQueue::new(initial_args))))
+    let mut builder =
+        tauri::Builder::default().manage(CliArgs(Mutex::new(OpenFileQueue::new(initial_args))));
+
+    // 单实例必须先于其他插件注册：第二实例的文件参数经现有队列转交主窗口，
+    // 避免出现第二个配置写入者。
+    #[cfg(desktop)]
+    {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
+            for path in collect_file_args(args.into_iter().skip(1), Path::new(&cwd)) {
+                emit_file_opened(app, path);
+            }
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }));
+    }
+
+    builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(
@@ -559,7 +517,10 @@ fn main() {
             save_file,
             save_reading_progress,
             load_reading_progress,
-            get_recent_files,
+            library::get_library_files,
+            library::register_library_file,
+            library::remove_library_file,
+            library::document_path_status,
             get_cli_args,
         ])
         .build(tauri::generate_context!())
@@ -627,21 +588,6 @@ mod tests {
 
     fn path_string(path: &Path) -> String {
         path.to_string_lossy().into_owned()
-    }
-
-    fn read_recent_file(path: &Path) -> Vec<String> {
-        serde_json::from_str(&fs::read_to_string(path).expect("recent file should exist"))
-            .expect("recent file should contain valid JSON")
-    }
-
-    fn read_with_test_recent(
-        path: &Path,
-        allow_large_log: bool,
-        recent_file: &Path,
-    ) -> Result<FileData, BackendError> {
-        read_file_with_registration(path_string(path), allow_large_log, |opened_path| {
-            save_recent_file_at(recent_file, opened_path).expect("test recent file should save");
-        })
     }
 
     #[test]
@@ -719,11 +665,8 @@ mod tests {
     }
 
     #[test]
-    fn unconfirmed_large_log_is_not_read_or_registered() {
+    fn unconfirmed_large_log_is_not_read() {
         let directory = TestDirectory::new("unconfirmed-log");
-        let recent_file = directory.path("recent.json");
-        save_recent_file_at(&recent_file, "sentinel.md").unwrap();
-        let recent_before = fs::read(&recent_file).unwrap();
 
         let log = directory.path("large.log");
         fs::File::create(&log)
@@ -731,17 +674,13 @@ mod tests {
             .set_len(file_types::policy().unwrap().large_log_warning_bytes())
             .unwrap();
 
-        let error = read_with_test_recent(&log, false, &recent_file).unwrap_err();
+        let error = read_document(path_string(&log), false).unwrap_err();
         assert_eq!(error.code, "large_log_confirmation_required");
-        assert_eq!(fs::read(&recent_file).unwrap(), recent_before);
     }
 
     #[test]
     fn log_growth_after_inspection_is_rechecked_before_reading() {
         let directory = TestDirectory::new("growing-log");
-        let recent_file = directory.path("recent.json");
-        save_recent_file_at(&recent_file, "sentinel.md").unwrap();
-        let recent_before = fs::read(&recent_file).unwrap();
         let log = directory.path("growing.log");
         fs::write(&log, b"initial").unwrap();
 
@@ -754,9 +693,8 @@ mod tests {
             .unwrap()
             .set_len(file_types::policy().unwrap().large_log_warning_bytes())
             .unwrap();
-        let error = read_with_test_recent(&log, false, &recent_file).unwrap_err();
+        let error = read_document(path_string(&log), false).unwrap_err();
         assert_eq!(error.code, "large_log_confirmation_required");
-        assert_eq!(fs::read(&recent_file).unwrap(), recent_before);
     }
 
     #[test]
@@ -780,12 +718,11 @@ mod tests {
     #[test]
     fn tex_reading_supports_utf8_and_gb18030_and_returns_document_capabilities() {
         let directory = TestDirectory::new("tex-decode");
-        let recent_file = directory.path("recent.json");
 
         let utf8 = directory.path("utf8.tex");
         let utf8_content = "\\section{你好}\r\n\r\n  indented\n\\command{value}";
         fs::write(&utf8, utf8_content.as_bytes()).unwrap();
-        let utf8_data = read_with_test_recent(&utf8, false, &recent_file).unwrap();
+        let utf8_data = read_document(path_string(&utf8), false).unwrap();
         assert_eq!(utf8_data.content, utf8_content);
         assert_eq!(utf8_data.encoding, "UTF-8");
         assert_eq!(utf8_data.kind, DocumentKind::Text);
@@ -795,33 +732,23 @@ mod tests {
 
         let gb18030 = directory.path("gb18030.TeX");
         fs::write(&gb18030, [0xD6, 0xD0, 0xCE, 0xC4]).unwrap();
-        let gb18030_data = read_with_test_recent(&gb18030, false, &recent_file).unwrap();
+        let gb18030_data = read_document(path_string(&gb18030), false).unwrap();
         assert_eq!(gb18030_data.content, "中文");
         assert_eq!(gb18030_data.encoding, "GB18030");
-
-        assert_eq!(
-            read_recent_file(&recent_file),
-            vec![path_string(&gb18030), path_string(&utf8)]
-        );
     }
 
     #[test]
-    fn failed_decode_does_not_change_recent_files() {
+    fn failed_decode_and_missing_paths_return_stable_errors() {
         let directory = TestDirectory::new("decode-failure");
-        let recent_file = directory.path("recent.json");
-        save_recent_file_at(&recent_file, "sentinel.md").unwrap();
-        let recent_before = fs::read(&recent_file).unwrap();
 
         let invalid = directory.path("invalid.tex");
         fs::write(&invalid, [0x81]).unwrap();
-        let error = read_with_test_recent(&invalid, false, &recent_file).unwrap_err();
+        let error = read_document(path_string(&invalid), false).unwrap_err();
         assert_eq!(error.code, "decode_failed");
-        assert_eq!(fs::read(&recent_file).unwrap(), recent_before);
 
         let missing = directory.path("missing.tex");
-        let error = read_with_test_recent(&missing, false, &recent_file).unwrap_err();
+        let error = read_document(path_string(&missing), false).unwrap_err();
         assert_eq!(error.code, "missing_file");
-        assert_eq!(fs::read(&recent_file).unwrap(), recent_before);
     }
 
     #[test]
@@ -928,20 +855,46 @@ mod tests {
         fs::write(&unsupported, b"png").unwrap();
         fs::create_dir(&fake_file).unwrap();
 
-        let accepted = collect_file_args(vec![
-            "--ignored-option".to_string(),
-            path_string(&tex),
-            path_string(&log),
-            path_string(&markdown),
-            path_string(&unsupported),
-            path_string(&fake_file),
-            path_string(&directory.path("missing.txt")),
-        ]);
+        let accepted = collect_file_args(
+            vec![
+                "--ignored-option".to_string(),
+                path_string(&tex),
+                path_string(&log),
+                path_string(&markdown),
+                path_string(&unsupported),
+                path_string(&fake_file),
+                path_string(&directory.path("missing.txt")),
+            ],
+            &directory.path,
+        );
 
         assert_eq!(
             accepted,
             vec![path_string(&tex), path_string(&log), path_string(&markdown)]
         );
+    }
+
+    #[test]
+    fn cli_relative_paths_are_resolved_against_the_base_directory() {
+        let directory = TestDirectory::new("cli-relative");
+        let relative = directory.path("relative.md");
+        fs::write(&relative, b"# relative").unwrap();
+        let tex = directory.path("paper.tex");
+        fs::write(&tex, b"tex").unwrap();
+        let unsupported = directory.path("image.png");
+        fs::write(&unsupported, b"png").unwrap();
+
+        let accepted = collect_file_args(
+            vec![
+                "relative.md".to_string(),
+                "paper.tex".to_string(),
+                "missing.md".to_string(),
+                "image.png".to_string(),
+            ],
+            &directory.path,
+        );
+
+        assert_eq!(accepted, vec![path_string(&relative), path_string(&tex)]);
     }
 
     #[test]
@@ -1147,57 +1100,28 @@ mod tests {
     }
 
     #[test]
-    fn progress_and_recent_helpers_only_use_the_injected_storage_paths() {
+    fn progress_helpers_only_use_the_injected_storage_paths() {
         let directory = TestDirectory::new("injected-storage");
         let legacy = directory.path("legacy");
         let canonical = directory.path("canonical");
         fs::create_dir(&legacy).unwrap();
         fs::create_dir(&canonical).unwrap();
         let legacy_progress = br#"{"legacy.md":{"scroll_top":9.0,"scroll_pct":0.9}}"#;
-        let legacy_recent = br#"["legacy.md"]"#;
         fs::write(legacy.join("progress.json"), legacy_progress).unwrap();
-        fs::write(legacy.join("recent.json"), legacy_recent).unwrap();
         let storage_paths = StoragePaths::new(canonical.clone());
 
         save_reading_progress_at(&storage_paths, "canonical.md".to_string(), 0.75).unwrap();
-        save_recent_file(&storage_paths, "canonical.md");
 
         let progress = load_reading_progress_at(&storage_paths, "canonical.md".to_string());
         assert_eq!(progress.scroll_top, 0.0);
         assert_eq!(progress.scroll_pct, 0.75);
-        assert_eq!(get_recent_files_at(&storage_paths), vec!["canonical.md"]);
         assert_eq!(
             fs::read(legacy.join("progress.json")).unwrap(),
             legacy_progress
         );
-        assert_eq!(fs::read(legacy.join("recent.json")).unwrap(), legacy_recent);
         assert_eq!(
             storage_paths.progress_file(),
             canonical.join("progress.json")
         );
-        assert_eq!(storage_paths.recent_file(), canonical.join("recent.json"));
-    }
-
-    #[test]
-    fn successful_read_registers_only_the_injected_canonical_recent_file() {
-        let directory = TestDirectory::new("read-canonical-recent");
-        let legacy = directory.path("legacy");
-        let canonical = directory.path("canonical");
-        fs::create_dir(&legacy).unwrap();
-        fs::create_dir(&canonical).unwrap();
-        let legacy_recent = br#"["legacy.md"]"#;
-        fs::write(legacy.join("recent.json"), legacy_recent).unwrap();
-        let document = directory.path("paper.md");
-        fs::write(&document, b"# canonical recent").unwrap();
-        let storage_paths = StoragePaths::new(canonical.clone());
-
-        let data = read_file_at(path_string(&document), false, &storage_paths).unwrap();
-
-        assert_eq!(data.path, path_string(&document));
-        assert_eq!(
-            read_recent_file(&canonical.join("recent.json")),
-            vec![path_string(&document)]
-        );
-        assert_eq!(fs::read(legacy.join("recent.json")).unwrap(), legacy_recent);
     }
 }

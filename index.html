@@ -23,10 +23,15 @@
           <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/>
         </svg>
       </button>
+      <button id="btn-library" class="tool-btn" type="button" aria-expanded="false" aria-controls="library-panel" title="文件目录" aria-label="文件目录">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 6h16M4 12h16M4 18h10"/>
+        </svg>
+      </button>
       <span id="file-name" class="file-name">MD Reader</span>
     </div>
     <div class="toolbar-center">
-      <button id="btn-toc" class="tool-btn" title="目录 (Ctrl+\\)">
+      <button id="btn-toc" class="tool-btn" type="button" aria-expanded="false" aria-controls="toc-panel" title="目录 (Ctrl+\)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
           <line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="14" y2="12"/><line x1="4" y1="18" x2="18" y2="18"/>
         </svg>
@@ -89,8 +94,19 @@
 
   <!-- 主内容区 -->
   <main id="main" class="main">
+    <!-- 文件目录侧栏 -->
+    <aside id="library-panel" class="side-panel library-panel hidden" aria-label="文件目录">
+      <div class="side-panel-title">文件目录</div>
+      <div id="library-error" class="library-error hidden">
+        <div id="library-error-text" class="library-message" role="status" aria-live="polite"></div>
+        <button id="library-retry" type="button">重试</button>
+      </div>
+      <div id="library-empty" class="library-message">尚未打开文件</div>
+      <div id="library-list" class="library-list" role="list"></div>
+    </aside>
+
     <!-- 目录侧栏 -->
-    <aside id="toc-panel" class="toc-panel hidden">
+    <aside id="toc-panel" class="side-panel toc-panel hidden">
       <div class="toc-panel-title">目录</div>
       <div id="toc-content" class="toc-content"></div>
     </aside>
@@ -162,6 +178,11 @@
 
   <!-- accept 由共享文档类型策略在运行时设置 -->
   <input type="file" id="file-input" style="display:none" />
+
+  <!-- 文件目录右键菜单 -->
+  <div id="file-context-menu" class="context-menu hidden" role="menu" aria-label="文件操作">
+    <button type="button" role="menuitem" data-action="remove">移出文件目录</button>
+  </div>
 
   <script type="module" src="/src/js/app.js"></script>
 </body>
