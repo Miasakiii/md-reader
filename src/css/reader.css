@@ -733,38 +733,7 @@
   background: rgba(40, 80, 140, 0.95);
 }
 
-/* ===== Recent Files Dropdown ===== */
-.recent-dropdown {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  margin-top: 4px;
-  min-width: 280px;
-  max-height: 320px;
-  overflow-y: auto;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  box-shadow: var(--shadow-lg);
-  z-index: 200;
-  padding: 6px;
-  animation: dropIn 0.2s var(--ease-out);
-}
-
-@keyframes dropIn {
-  from { opacity: 0; transform: translateY(-8px) scale(0.97); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
-}
-
-.recent-dropdown-title {
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-muted);
-  padding: 8px 12px 6px;
-}
-
+/* ===== 欢迎页最近打开 ===== */
 .recent-item {
   display: block;
   width: 100%;

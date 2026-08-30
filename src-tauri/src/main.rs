@@ -40,7 +40,6 @@ struct DocumentInspection {
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 struct ReadingProgress {
-    scroll_top: f64,
     scroll_pct: f64,
 }
 
@@ -321,13 +320,7 @@ fn save_reading_progress_at(
         std::collections::HashMap::new()
     };
 
-    map.insert(
-        path,
-        ReadingProgress {
-            scroll_top: 0.0,
-            scroll_pct,
-        },
-    );
+    map.insert(path, ReadingProgress { scroll_pct });
 
     let json = serde_json::to_string_pretty(&map).unwrap_or_default();
     fs::write(&progress_file, json).map_err(|e| format!("保存进度失败: {}", e))?;
@@ -1132,7 +1125,6 @@ mod tests {
         save_reading_progress_at(&storage_paths, "canonical.md".to_string(), 0.75).unwrap();
 
         let progress = load_reading_progress_at(&storage_paths, "canonical.md".to_string());
-        assert_eq!(progress.scroll_top, 0.0);
         assert_eq!(progress.scroll_pct, 0.75);
         assert_eq!(
             fs::read(legacy.join("progress.json")).unwrap(),

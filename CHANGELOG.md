@@ -14,6 +14,12 @@
 ### Changed
 
 - 最近文件存储由旧 `recent.json`（20 条上限）切换为 `library.json`（不设上限）；读取文档不再写回 `recent.json`，旧文件保留用于版本回退
+- 应用图标四角真实透明：确定性 alpha 蒙版（圆角半径为画布宽度 20%），图案、颜色与内部像素逐字节不变；Windows/macOS/Linux/Android/iOS 全部派生图标重新生成
+
+### Removed
+
+- 未被引用的 `src/css/scrollbar.css` 与 recent dropdown 遗留样式
+- 阅读进度 JSON 不再写入恒为 0 的旧 `scroll_top` 字段；旧数据中的该字段继续被忽略，向后兼容
 
 ### Fixed
 
