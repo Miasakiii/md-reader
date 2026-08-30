@@ -23,8 +23,11 @@ import {
 } from './document-session.js';
 import { readBrowserTextFile } from './text-decoding.js';
 import {
+  applyTrashedOutcome,
   createFileLibraryView,
   nextSidePanel,
+  requestTrash,
+  samePath,
   validateLibraryPaths,
   welcomePaths,
 } from './file-library.js';
@@ -154,6 +157,7 @@ const fileLibraryView = createFileLibraryView({
   platform: state.platform,
   onOpen: path => openLibraryFile(path),
   onRemove: path => removeLibraryFile(path),
+  onTrash: path => trashLibraryFile(path),
   onError: error => showToast(describeAppError(error, '文件目录操作失败')),
 });
 
@@ -612,6 +616,86 @@ async function openLibraryFile(path) {
     }
   }
   return opened;
+}
+
+async function confirmTrashDialog(message) {
+  if (tauriAvailable) {
+    try {
+      const dialog = await getTauriDialog();
+      if (typeof dialog.confirm === 'function') {
+        return await dialog.confirm(message, { title: '移到回收站', kind: 'warning' });
+      }
+    } catch (error) {
+      console.warn('Tauri confirm dialog failed:', error?.message || error);
+    }
+  }
+  return window.confirm(message);
+}
+
+async function trashLibraryFile(path) {
+  if (documentInteractionLocked()) {
+    showToast('文档操作正在进行，请稍候', 'info');
+    return;
+  }
+  try {
+    const result = await requestTrash({
+      path,
+      currentPath: state.filePath,
+      isDirty: state.isDirty,
+      platform: state.platform,
+      confirmTrash: confirmTrashDialog,
+      trashFile: async target => tauriInvoke('trash_library_file', { path: target }),
+    });
+    if (result.status === 'cancelled') return;
+    const applied = await applyTrashedOutcome(result.outcome, outcome =>
+      applyTrashedUi(path, outcome),
+    );
+    if (applied.status === 'ui_failed') {
+      showToast('原文件已移到回收站，但界面刷新失败');
+      await loadLibraryFiles();
+    }
+  } catch (error) {
+    showToast(describeAppError(error, '移到回收站失败'));
+  }
+}
+
+function applyTrashedUi(path, outcome) {
+  state.libraryFiles = Array.isArray(outcome.files) ? outcome.files : [];
+  renderLibrarySidebar();
+  if (state.filePath && samePath(state.filePath, path, state.platform)) {
+    returnToWelcome();
+  }
+  renderWelcome();
+  if (outcome.cleanupWarning) {
+    showToast(outcome.cleanupWarning, 'info');
+  }
+}
+
+function returnToWelcome() {
+  state.documentGeneration += 1;
+  state.editRevision = 0;
+  state.filePath = null;
+  state.nativeFile = false;
+  state.rawContent = '';
+  state.persistedContent = '';
+  state.kind = null;
+  state.renderMode = null;
+  state.readOnly = false;
+  state.toc = false;
+  state.sizeBytes = 0;
+  state.isDirty = false;
+  state.isEditMode = false;
+  if (state.activeSidePanel === 'toc') state.activeSidePanel = 'none';
+  clearSearch();
+  setFileEncoding('UTF-8');
+  els.editorTextarea.value = '';
+  applyModeVisibility();
+  applyDocumentControls();
+  setDocumentIdentity(null);
+  els.readerView.scrollTop = 0;
+  els.editorPreview.scrollTop = 0;
+  renderSidePanels();
+  renderWelcome();
 }
 
 function renderWelcome() {

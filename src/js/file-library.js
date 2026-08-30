@@ -85,6 +85,7 @@ export function createFileLibraryView({
   platform,
   onOpen,
   onRemove,
+  onTrash = () => {},
   onError,
   documentRef = globalThis.document,
   windowRef = globalThis.window,
@@ -151,6 +152,7 @@ export function createFileLibraryView({
     closeMenu();
     try {
       if (action === 'remove') await onRemove(path);
+      if (action === 'trash') await onTrash(path);
     } catch (error) {
       onError(toError(error));
     }
@@ -213,4 +215,45 @@ export function createFileLibraryView({
       closeMenu({ restoreFocus: false });
     },
   };
+}
+
+export function buildTrashConfirmationMessage({
+  path,
+  currentPath,
+  isDirty,
+  platform = 'posix',
+}) {
+  const dirtyWarning =
+    isDirty && samePath(path, currentPath, platform)
+      ? '\n\n当前文件有未保存修改，这些修改将丢失。'
+      : '';
+  return `确定将“${fileNameFromPath(path)}”移到系统回收站吗？\n\n文件可从系统回收站恢复。${dirtyWarning}`;
+}
+
+export async function requestTrash({
+  path,
+  currentPath,
+  isDirty,
+  platform,
+  confirmTrash,
+  trashFile,
+}) {
+  const message = buildTrashConfirmationMessage({ path, currentPath, isDirty, platform });
+  if (!(await confirmTrash(message))) return { status: 'cancelled' };
+  const outcome = await trashFile(path);
+  if (!outcome?.trashed) throw new Error('回收站命令未返回成功状态');
+  return { status: 'trashed', outcome };
+}
+
+export async function applyTrashedOutcome(outcome, applyUi) {
+  try {
+    await applyUi(outcome);
+    return { status: 'applied', outcome };
+  } catch (error) {
+    return {
+      status: 'ui_failed',
+      outcome,
+      error: error instanceof Error ? error : new Error(String(error)),
+    };
+  }
 }

@@ -23,5 +23,6 @@ test('index exposes the file library panel, toggle, and context menu hooks', asy
   assert.match(html, /id=["']library-panel["'][^>]*class=["'][^"']*side-panel/);
   assert.match(html, /role=["']menu["']/);
   assert.match(html, /data-action=["']remove["']/);
-  assert.equal((html.match(/role=["']menuitem["']/g) ?? []).length, 1);
+  assert.match(html, /data-action=["']trash["']/);
+  assert.equal((html.match(/role=["']menuitem["']/g) ?? []).length, 2);
 });

@@ -2,12 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  applyTrashedOutcome,
+  buildTrashConfirmationMessage,
   clampMenuPosition,
   createFileLibraryView,
   fileNameFromPath,
   menuKeyDecision,
   nextMenuIndex,
   nextSidePanel,
+  requestTrash,
   samePath,
   validateLibraryPaths,
   welcomePaths,
@@ -344,4 +347,123 @@ test('menu action failures surface through onError without unhandled rejections'
   assert.equal(errors.length, 1);
   assert.equal(errors[0].message, '移出失败');
   assert.equal(menuElement.classList.contains('hidden'), true);
+});
+
+test('trash confirmation message includes recovery note and dirty warning', () => {
+  const base = { path: 'C:/docs/a.md', currentPath: 'C:/docs/b.md', isDirty: false, platform: 'windows' };
+  const plain = buildTrashConfirmationMessage(base);
+  assert.match(plain, /a\.md/);
+  assert.match(plain, /系统回收站恢复/);
+  assert.doesNotMatch(plain, /未保存修改/);
+
+  assert.match(
+    buildTrashConfirmationMessage({ ...base, currentPath: 'c:/docs/a.md', isDirty: true }),
+    /未保存修改/,
+  );
+});
+
+test('requestTrash cancels without invoking backend and reports backend rejection', async () => {
+  let backendCalls = 0;
+  const common = {
+    path: 'C:/docs/a.md',
+    currentPath: 'C:/docs/a.md',
+    isDirty: true,
+    platform: 'windows',
+    trashFile: async () => {
+      backendCalls += 1;
+      return { trashed: true, files: [], cleanupWarning: null };
+    },
+  };
+
+  assert.deepEqual(await requestTrash({ ...common, confirmTrash: async () => false }), {
+    status: 'cancelled',
+  });
+  assert.equal(backendCalls, 0);
+
+  const result = await requestTrash({ ...common, confirmTrash: async () => true });
+  assert.equal(result.status, 'trashed');
+  assert.equal(backendCalls, 1);
+  assert.deepEqual(result.outcome.files, []);
+
+  await assert.rejects(
+    () =>
+      requestTrash({
+        ...common,
+        confirmTrash: async () => true,
+        trashFile: async () => {
+          throw new Error('后端拒绝');
+        },
+      }),
+    /后端拒绝/,
+  );
+});
+
+test('applyTrashedOutcome separates recycle success from UI commit failure', async () => {
+  const applied = await applyTrashedOutcome(
+    { trashed: true, files: ['C:/other.md'], cleanupWarning: null },
+    async () => {},
+  );
+  assert.equal(applied.status, 'applied');
+
+  const uiResult = await applyTrashedOutcome(
+    { trashed: true, files: [], cleanupWarning: null },
+    async () => {
+      throw new Error('界面提交失败');
+    },
+  );
+  assert.equal(uiResult.status, 'ui_failed');
+  assert.equal(uiResult.outcome.trashed, true);
+});
+
+test('view dispatches the trash action to the injected onTrash callback', async () => {
+  const listElement = createFakeElement('div');
+  const emptyElement = createFakeElement();
+  const scrollElement = createFakeElement();
+  const menuElement = createFakeElement('div');
+  menuElement.classList.add('hidden');
+  const trashItem = createFakeElement('button');
+  trashItem.setAttribute('role', 'menuitem');
+  trashItem.dataset.action = 'trash';
+  menuElement.children.push(trashItem);
+  const documentRef = createFakeElement('document');
+  documentRef.createElement = () => createFakeElement('div');
+  const windowRef = {
+    innerWidth: 800,
+    innerHeight: 600,
+    listeners: {},
+    addEventListener() {},
+    removeEventListener() {},
+    dispatch() {},
+  };
+  const trashed = [];
+
+  const view = createFileLibraryView({
+    listElement,
+    scrollElement,
+    emptyElement,
+    menuElement,
+    platform: 'windows',
+    onOpen: () => {},
+    onRemove: () => {},
+    onTrash: path => trashed.push(path),
+    onError: () => {},
+    documentRef,
+    windowRef,
+  });
+
+  view.render(['C:/docs/readme.md'], '');
+  const [row] = listElement.children;
+  const [button] = row.children;
+  button.dispatch('contextmenu', {
+    preventDefault() {},
+    clientX: 10,
+    clientY: 10,
+    target: {},
+  });
+
+  menuElement.dispatch('click', {
+    target: { closest: selector => (selector === '[data-action]' ? trashItem : null) },
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(trashed, ['C:/docs/readme.md']);
 });

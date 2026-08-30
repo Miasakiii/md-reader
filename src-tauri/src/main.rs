@@ -462,6 +462,14 @@ fn emit_file_opened(app: &tauri::AppHandle, path: String) {
     }
 }
 
+/// 仅调试构建允许用环境变量把配置目录隔离到指定位置，供桌面 QA 使用。
+fn isolated_config_dir_override() -> Option<PathBuf> {
+    #[cfg(debug_assertions)]
+    return std::env::var_os("MD_READER_CONFIG_DIR").map(PathBuf::from);
+    #[cfg(not(debug_assertions))]
+    return None;
+}
+
 /// 获取启动时传入的文件路径
 #[tauri::command]
 fn get_cli_args(state: tauri::State<CliArgs>) -> Vec<String> {
@@ -498,15 +506,25 @@ fn main() {
                 .build(),
         )
         .setup(|app| {
-            #[cfg(target_os = "windows")]
-            let storage_paths = {
-                let canonical_dir = app.path().app_config_dir()?;
-                migrate_storage_files(&legacy_config_dir(), &canonical_dir)?;
-                StoragePaths::new(canonical_dir)
-            };
+            let storage_paths = match isolated_config_dir_override() {
+                Some(dir) => {
+                    fs::create_dir_all(&dir)
+                        .map_err(|error| format!("创建隔离配置目录失败: {error}"))?;
+                    StoragePaths::new(dir)
+                }
+                None => {
+                    #[cfg(target_os = "windows")]
+                    let storage_paths = {
+                        let canonical_dir = app.path().app_config_dir()?;
+                        migrate_storage_files(&legacy_config_dir(), &canonical_dir)?;
+                        StoragePaths::new(canonical_dir)
+                    };
 
-            #[cfg(not(target_os = "windows"))]
-            let storage_paths = legacy_storage_paths(legacy_config_dir());
+                    #[cfg(not(target_os = "windows"))]
+                    let storage_paths = legacy_storage_paths(legacy_config_dir());
+                    storage_paths
+                }
+            };
 
             app.manage(storage_paths);
             Ok(())
@@ -520,6 +538,7 @@ fn main() {
             library::get_library_files,
             library::register_library_file,
             library::remove_library_file,
+            library::trash_library_file,
             library::document_path_status,
             get_cli_args,
         ])
