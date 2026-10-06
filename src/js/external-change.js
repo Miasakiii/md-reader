@@ -17,19 +17,20 @@ import { isEditorSnapshotCurrent } from './document-session.js';
 /**
  * 外部改动事件的可测核心：从事件路径与当前状态推出下一步动作。
  *
- * 丢弃条件（任一命中即不提示）：
- * - 事件路径与当前文档不符（多文档或多窗口场景）；
- * - 当前无打开文档；
- * - 文档代次已变（事件来自上一个文档，切换后才到达）。
+ * 丢弃条件只有两条：
+ * - 事件路径与当前文档不符（切换到其他文档后，迟到的旧文档事件）；
+ * - 当前没有打开的文档。
+ *
+ * 刻意**不**比对 `documentGeneration`：重载同一文件同样会递增代次，把它
+ * 当守卫会让「重载后继续编辑」全部静默失败（实测踩过）。同一文档的迟到
+ * 通知与实时事件在语义上等价——都意味着磁盘已变。
  *
  * `hasDraft` 不在这里阻断：带草稿时**仍要提示**，只是重载动作要走
- * 未保存保护，由调用方按 `documentGeneration` 决定，不能静默丢弃。
+ * 未保存保护，由调用方决定，不能静默丢弃。
  */
 export function classifyExternalChange({
   changedPath,
   documentPath,
-  generation,
-  snapshotGeneration,
   readOnly,
 }) {
   // 无文档或事件不是当前文档：不是「当前文档被外部修改」。
@@ -38,10 +39,6 @@ export function classifyExternalChange({
   }
   if (!samePath(changedPath, documentPath)) {
     return { action: 'ignore', reason: 'other-document' };
-  }
-  // 事件抵达时代次已变：属于旧文档的迟到通知。
-  if (generation !== snapshotGeneration) {
-    return { action: 'ignore', reason: 'stale-generation' };
   }
   // 只读文档（.log）不会被本应用写入，外部改动同样只提示。
   return { action: 'notify', readOnly: Boolean(readOnly) };
@@ -63,6 +60,13 @@ function normalizePath(value) {
 /**
  * 监听控制器。负责命令调用与事件订阅，状态判定全部委托给纯函数。
  */
+// 诊断：与后端写同一份日志。用户在 release 下看不到 console，必须落盘。
+function diagnostic(message) {
+  const line = `[js][${Date.now()}] ${message}\n`;
+  console.debug(line.trim());
+  globalThis.__TAURI__?.core?.invoke?.('append_watch_diagnostic', { line }).catch(() => {});
+}
+
 export function createExternalChangeWatcher({
   invoke,
   listen,
@@ -72,9 +76,6 @@ export function createExternalChangeWatcher({
   now = () => Date.now(),
 }) {
   let unwatchedPath = null;
-  // 开始监听时的文档代次。事件本身不带代次，用它作快照基准即可识别
-  // 「切换文档后才抵达的迟到通知」。
-  let watchedGeneration = null;
   // 自保存抑制：与后端窗口对齐，前端也留一份，避免双击保存时的往返。
   const SELF_SAVE_WINDOW_MS = 1200;
   let lastSelfSaveAt = 0;
@@ -93,22 +94,19 @@ export function createExternalChangeWatcher({
     if (unwatchedPath === filePath) return;
     await stopWatching();
     unwatchedPath = filePath;
-    watchedGeneration = getDocumentState().documentGeneration;
     try {
       await invoke('watch_document_command', { documentPath: filePath });
-      console.debug('[watch] watching', filePath);
+      diagnostic(`watching started: ${filePath}`);
     } catch (error) {
       // 监听失败不阻断阅读：外部提示是增强，不是必需能力。
       unwatchedPath = null;
-      watchedGeneration = null;
-      console.warn('[watch] failed to start:', error);
+      diagnostic(`watch failed: ${String(error)}`);
     }
   }
 
   async function stopWatching() {
     const previous = unwatchedPath;
     unwatchedPath = null;
-    watchedGeneration = null;
     if (!previous) return;
     try {
       await invoke('unwatch_document_command', { documentPath: previous });
@@ -126,30 +124,34 @@ export function createExternalChangeWatcher({
   }
 
   async function handleEvent(changedPath) {
-    console.debug('[watch] event received', changedPath);
+    diagnostic(`event received: ${String(changedPath)}`);
+    const st = getDocumentState();
+    diagnostic(`state: filePath=${String(st.filePath)} generation=${st.documentGeneration}`);
     // 前端抑制窗口：保存后立刻回来的事件不算外部修改。
     // `lastSelfSaveAt` 为 0 表示本次会话还没保存过——此时**不得**抑制，
     // 否则会话刚开始的第一个外部事件会被误吞。
     if (lastSelfSaveAt > 0 && now() - lastSelfSaveAt < SELF_SAVE_WINDOW_MS) {
-      console.debug('[watch] event suppressed by self-save window');
+      diagnostic('suppressed by self-save window');
       return;
     }
 
     const state = getDocumentState();
-    // 监听建立时的代次：事件抵达时若代次已变，说明是旧文档的迟到通知。
-    // 后端事件不携带代次，故以「开始监听时记录的代次」为快照基准。
-    // 兜底：尚未start() 就收到事件（时序竞态）时，以当前代次为准，
-    // 不因此吞掉真实提示——漏报比多报更糟。
-    const snapshotGeneration = watchedGeneration ?? state.documentGeneration;
+    // **只按路径判定，不用 documentGeneration。**
+    //
+    // 曾用「监听建立时的代次」作快照基准来识别迟到通知，但重载同一文件
+    // 也会让 generation 递增（实测 1 → 2），于是第一次提示后再改动全部
+    // 被判为 stale-generation 丢弃。同一文档的迟到通知与实时事件在语义上
+    // 无需区分——两者都意味着「磁盘已变」，提示一次即可。
+    // 切换到**不同**文档时路径不匹配，由 classifyExternalChange 拦住。
     const outcome = classifyExternalChange({
       changedPath,
       documentPath: state.filePath,
-      generation: snapshotGeneration,
-      snapshotGeneration: state.documentGeneration,
       readOnly: state.readOnly,
     });
+    diagnostic(`classify outcome: ${JSON.stringify(outcome)}`);
     if (outcome.action !== 'notify') return;
 
+      diagnostic('calling onNotify');
     onNotify?.({
       path: changedPath,
       hasDraft: Boolean(state.isDirty),

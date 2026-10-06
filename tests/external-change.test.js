@@ -42,8 +42,6 @@ test('an event for the current document produces a notification', () => {
   const outcome = classifyExternalChange({
     changedPath: 'C:/docs/guide.md',
     documentPath: 'C:/docs/guide.md',
-    generation: 7,
-    snapshotGeneration: 7,
   });
 
   assert.deepEqual(outcome, { action: 'notify', readOnly: false });
@@ -53,8 +51,6 @@ test('paths are compared case-insensitively and across slash styles', () => {
   const outcome = classifyExternalChange({
     changedPath: 'c:\\DOCS\\guide.md',
     documentPath: 'C:/docs/guide.md',
-    generation: 7,
-    snapshotGeneration: 7,
   });
 
   assert.equal(outcome.action, 'notify');
@@ -64,8 +60,6 @@ test('the windows extended-length prefix does not break path comparison', () => 
   const outcome = classifyExternalChange({
     changedPath: '\\\\?\\C:\\docs\\guide.md',
     documentPath: 'C:/docs/guide.md',
-    generation: 7,
-    snapshotGeneration: 7,
   });
 
   assert.equal(outcome.action, 'notify');
@@ -75,8 +69,6 @@ test('events for other documents are ignored', () => {
   const outcome = classifyExternalChange({
     changedPath: 'C:/docs/other.md',
     documentPath: 'C:/docs/guide.md',
-    generation: 7,
-    snapshotGeneration: 7,
   });
 
   assert.deepEqual(outcome, { action: 'ignore', reason: 'other-document' });
@@ -87,8 +79,6 @@ test('events without an open document are ignored', () => {
     classifyExternalChange({
       changedPath: 'C:/docs/guide.md',
       documentPath: null,
-      generation: 7,
-      snapshotGeneration: 7,
     }),
     { action: 'ignore', reason: 'no-document' },
   );
@@ -98,23 +88,43 @@ test('events without an open document are ignored', () => {
   );
 });
 
-test('a late event from a previous document generation is ignored', () => {
+test('reloading the same document does not silence later events', () => {
+  // 回归用例：曾用 documentGeneration 作守卫，但重载同一文件也会让代次
+  // 递增（实测 1 → 2），导致第一次提示后再改动全部被判为 stale-generation
+  // 丢弃。现在只看路径，重载后的事件必须照常提示。
   const outcome = classifyExternalChange({
     changedPath: 'C:/docs/guide.md',
     documentPath: 'C:/docs/guide.md',
-    generation: 7,
-    snapshotGeneration: 9,
   });
 
-  assert.deepEqual(outcome, { action: 'ignore', reason: 'stale-generation' });
+  assert.equal(outcome.action, 'notify');
+});
+
+test('classifyExternalChange ignores generation arguments entirely', () => {
+  // 负向保证：即便调用方传了互相矛盾的代次，也不得影响判定。
+  // 少了这一条，上面那条回归用例就抓不住「代次守卫」缺陷。
+  const base = { changedPath: 'C:/docs/guide.md', documentPath: 'C:/docs/guide.md' };
+
+  for (const extra of [
+    { generation: 1, snapshotGeneration: 2 },
+    { generation: 9, snapshotGeneration: 1 },
+    { generation: 0, snapshotGeneration: 0 },
+  ]) {
+    const outcome = classifyExternalChange({ ...base, ...extra });
+    assert.equal(
+      outcome.action,
+      'notify',
+      `代次参数 ${JSON.stringify(extra)} 不得影响判定`
+    );
+  }
 });
 
 test('read-only documents still notify but are marked', () => {
   const outcome = classifyExternalChange({
     changedPath: 'C:/docs/app.log',
     documentPath: 'C:/docs/app.log',
-    generation: 3,
-    snapshotGeneration: 3,
+
+
     readOnly: true,
   });
 
@@ -261,4 +271,37 @@ test('an event arriving before start() is still surfaced', async () => {
   await watcher.handleEvent('C:/docs/guide.md');
 
   assert.equal(calls.onNotify.length, 1);
+});
+
+test('a document generation bump alone never silences events', async () => {
+  // 回归：重载同一文档会让 documentGeneration 递增，但事件仍属当前文档。
+  // 守卫只看路径——代次变化不得导致静默。
+  const { watcher, calls, state } = watcherHarness();
+
+  await watcher.start();
+  state.documentGeneration += 1; // 模拟重载后的代次递增
+
+  await watcher.handleEvent('C:/docs/guide.md');
+  assert.equal(calls.onNotify.length, 1, '代次递增后事件必须照常提示');
+
+  state.documentGeneration += 5;
+  await watcher.handleEvent('C:/docs/guide.md');
+  assert.equal(calls.onNotify.length, 2, '反复重载也不应静音');
+});
+
+test('repeated external edits keep notifying after a reload', async () => {
+  // 端到端复现用户场景：改 → 重载 → 再改 → 再改，每次都应提示。
+  const { watcher, calls, state } = watcherHarness();
+
+  await watcher.start();
+  await watcher.handleEvent('C:/docs/guide.md');
+  assert.equal(calls.onNotify.length, 1);
+
+  // 重载：路径不变，代次递增。
+  state.documentGeneration += 1;
+  await watcher.handleEvent('C:/docs/guide.md');
+  assert.equal(calls.onNotify.length, 2, '重载后的第一次改动必须提示');
+
+  await watcher.handleEvent('C:/docs/guide.md');
+  assert.equal(calls.onNotify.length, 3, '连续改动都必须提示');
 });
