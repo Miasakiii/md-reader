@@ -8,6 +8,7 @@
 
 - ⚡ **极速启动** — 基于 Tauri 2，秒开无延迟
 - 🎨 **三种主题** — 浅色 / 深色 / 护眼（Sepia），工具栏图标随主题三态切换
+- 📐 **铺满宽度** — 正文限宽居中或铺满窗口，`Ctrl+Shift+F` 切换并持久化
 - 📖 **优雅排版** — 衬线体正文、无衬线标题、精心调校行距字距
 - 📑 **目录导航** — 自动生成 TOC，滚动高亮当前章节
 - 🔍 **全文搜索** — Markdown、纯文本和只读日志均可搜索，实时高亮并逐个定位
@@ -23,7 +24,7 @@
 - 📄 **纯文本与 TeX 源码** — `.txt` / `.tex` 按原文显示和编辑，不执行 TeX 渲染或编译；自动识别 UTF-8 / GB18030/GBK
 - 🧾 **日志快照** — `.log` 一次性完整读取、只读展示并支持搜索；文件达到 10 MiB 时先确认
 - 🛡️ **切换保护** — 有未保存修改时，打开另一文档前可保存、放弃或取消
-- 🔒 **安全渲染** — DOMPurify 过滤 Markdown HTML 输出，CSP 限制资源加载
+- 🔒 **安全渲染** — DOMPurify 过滤 Markdown HTML 输出；生产 CSP 不含 `unsafe-eval`，开发服务器来源只在 `devCsp` 中放行
 - 🪶 **极致轻量** — 前端 gzip 约 121KB，安装包 ~8MB
 - 📦 **便携版** — Windows 单 exe 免安装
 
@@ -108,6 +109,7 @@ pwsh -File ./scripts/build-release.ps1
 | `Ctrl+E` | 切换编辑/阅读模式 |
 | `Ctrl+=` | 放大字号 |
 | `Ctrl+-` | 缩小字号 |
+| `Ctrl+Shift+F` | 铺满宽度 / 恢复限宽 |
 | `Esc` | 关闭搜索 |
 | `Enter` | 搜索下一个 |
 | `Shift+Enter` | 搜索上一个 |
@@ -159,6 +161,7 @@ md-reader/
 │       ├── file-types.js       # 前端文档类型策略与对话框过滤器
 │       ├── link-router.js      # 渲染后链接分类与系统打开路由
 │       ├── markdown-render.js  # Markdown 引擎、frontmatter 剥离与消毒后处理
+│       ├── preferences.js      # UI 偏好（主题/字号/铺满）单一 schema 持久化
 │       ├── text-decoding.js    # 浏览器严格 UTF-8 / GB18030 解码
 │       ├── window-theme.js     # 页面与原生窗口栏主题同步
 │       └── highlight.js        # 按需加载语言包 (30+)
@@ -185,6 +188,7 @@ md-reader/
 │   ├── link-router.test.js     # 链接分类与打开路由测试
 │   ├── markdown-render.test.js # 渲染管线、任务列表与 frontmatter 契约
 │   ├── markup.test.js          # 入口页面 DOM 契约测试
+│   ├── preferences.test.js     # 偏好解析、回退与存储失败契约
 │   ├── text-decoding.test.js   # 浏览器编码回退测试
 │   └── window-theme.test.js    # 原生窗口栏主题同步测试
 │
@@ -213,9 +217,9 @@ md-reader/
 | 组件 | 原始 | Gzip |
 |------|------|------|
 | CSS | 19.0 KB | 4.7 KB |
-| JS | 319.5 KB | 113.8 KB |
-| HTML | 9.7 KB | 2.8 KB |
-| **前端总计** | **348.2 KB** | **121.2 KB** |
+| JS | 320.5 KB | 114.2 KB |
+| HTML | 10.2 KB | 2.8 KB |
+| **前端总计** | **349.8 KB** | **121.7 KB** |
 
 ## ✅ 测试
 

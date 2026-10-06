@@ -89,6 +89,33 @@ test('Tauri grants only the narrow window mutation needed for theme sync', () =>
   assert.deepEqual(windowMutationPermissions, ['core:window:allow-set-theme']);
 });
 
+test('the asset protocol stays disabled and unscoped until local images land', () => {
+  const tauriConfig = readProjectJson('src-tauri/tauri.conf.json');
+  const assetProtocol = tauriConfig.app.security.assetProtocol;
+
+  if (assetProtocol === undefined) return;
+
+  // 一旦启用：enable 必须为 true，且静态 scope 必须留空——白名单只靠
+  // 运行时逐文件放行。任何通配（如 **）都等于给消毒器绕过配全盘钥匙。
+  assert.equal(assetProtocol.enable, true);
+  const scope = assetProtocol.scope;
+  const patterns = Array.isArray(scope) ? scope : scope?.allow ?? [];
+  assert.deepEqual(patterns, []);
+});
+
+test('the production CSP stays free of unsafe-eval while dev keeps it', () => {
+  const tauriConfig = readProjectJson('src-tauri/tauri.conf.json');
+  const csp = tauriConfig.app.security.csp;
+  const devCsp = tauriConfig.app.security.devCsp;
+
+  assert.doesNotMatch(csp, /'unsafe-eval'/, 'production CSP must not allow eval');
+  assert.doesNotMatch(csp, /localhost:1420/, 'production CSP must not reference the dev server');
+
+  if (devCsp !== undefined) {
+    assert.ok(devCsp.includes('localhost:1420'), 'dev CSP must keep the dev server origin');
+  }
+});
+
 test('the package test script scopes Node.js test discovery to repository tests', () => {
   const packageJson = readProjectJson('package.json');
   const packageLock = readProjectJson('package-lock.json');

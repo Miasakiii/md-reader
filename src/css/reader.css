@@ -240,6 +240,11 @@
   font-family: var(--font-serif);
 }
 
+/* 铺满模式：正文占满窗口宽度 */
+html.full-width .markdown-body {
+  max-width: none;
+}
+
 /* Plain text view */
 .plain-text {
   white-space: pre-wrap;

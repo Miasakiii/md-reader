@@ -23,6 +23,13 @@ import {
   renderDocumentHtml,
 } from './markdown-render.js';
 import {
+  DEFAULT_PREFERENCES,
+  THEMES,
+  createPreferenceStore,
+} from './preferences.js';
+
+const preferences = createPreferenceStore(globalThis.localStorage);
+import {
   applyTrashedOutcome,
   createFileLibraryView,
   nextSidePanel,
@@ -65,6 +72,7 @@ const state = {
   isEditMode: false,
   theme: 'light',
   fontSize: 16,
+  fullWidth: false,
   activeSidePanel: 'none',
   searchVisible: false,
   searchResults: [],
@@ -75,7 +83,7 @@ const state = {
   platform: /Win/i.test(globalThis.navigator?.platform ?? '') ? 'windows' : 'posix',
 };
 
-const themes = ['light', 'dark', 'sepia'];
+const themes = THEMES;
 const themeLabels = { light: '浅色', dark: '深色', sepia: '护眼' };
 
 // ========== DOM Elements ==========
@@ -89,6 +97,7 @@ const els = {
   btnTheme: $('btn-theme'),
   btnFontUp: $('btn-font-up'),
   btnFontDown: $('btn-font-down'),
+  btnFullWidth: $('btn-full-width'),
   btnSave: $('btn-save'),
   fileName: $('file-name'),
   searchBar: $('search-bar'),
@@ -1103,7 +1112,7 @@ function applyTheme(theme) {
   } else {
     document.documentElement.setAttribute('data-theme', theme);
   }
-  localStorage.setItem('md-reader-theme', theme);
+  preferences.set({ theme });
   document.documentElement.style.colorScheme = getNativeWindowTheme(theme);
   void syncNativeWindowTheme(theme);
 
@@ -1125,24 +1134,46 @@ function cycleTheme() {
 }
 
 function loadTheme() {
-  const stored = localStorage.getItem('md-reader-theme');
-  const saved = themes.includes(stored) ? stored : 'light';
-  applyTheme(saved);
+  applyTheme(preferences.load().theme);
 }
 
 // ========== Font Size ==========
+function applyFontSize(fontSize) {
+  state.fontSize = fontSize;
+  document.documentElement.style.setProperty('--font-size', fontSize + 'px');
+}
+
 function changeFontSize(delta) {
-  state.fontSize = Math.max(13, Math.min(22, state.fontSize + delta));
-  document.documentElement.style.setProperty('--font-size', state.fontSize + 'px');
-  localStorage.setItem('md-reader-font-size', state.fontSize);
+  const next = preferences.set({ fontSize: state.fontSize + delta });
+  applyFontSize(next.fontSize);
 }
 
 function loadFontSize() {
-  const saved = parseInt(localStorage.getItem('md-reader-font-size'));
-  if (saved && saved >= 13 && saved <= 22) {
-    state.fontSize = saved;
-    document.documentElement.style.setProperty('--font-size', state.fontSize + 'px');
+  const { fontSize } = preferences.load();
+  if (fontSize !== DEFAULT_PREFERENCES.fontSize) {
+    applyFontSize(fontSize);
   }
+}
+
+// ========== Full Width ==========
+function applyFullWidth(fullWidth) {
+  state.fullWidth = fullWidth;
+  document.documentElement.classList.toggle('full-width', fullWidth);
+  if (els.btnFullWidth) {
+    els.btnFullWidth.classList.toggle('active', fullWidth);
+    const label = fullWidth ? '退出铺满' : '铺满宽度';
+    els.btnFullWidth.title = `${label} (Ctrl+Shift+F)`;
+    els.btnFullWidth.setAttribute('aria-label', label);
+  }
+}
+
+function toggleFullWidth() {
+  applyFullWidth(!state.fullWidth);
+  preferences.set({ fullWidth: state.fullWidth });
+}
+
+function loadFullWidth() {
+  applyFullWidth(preferences.load().fullWidth);
 }
 
 // ========== Side Panels ==========
@@ -1451,6 +1482,7 @@ document.addEventListener('keydown', e => {
     if (state.readOnly) showToast(ERROR_MESSAGES.readonly_file, 'info');
     else toggleEditMode();
   }
+  if (ctrl && e.shiftKey && e.key === 'F') { e.preventDefault(); toggleFullWidth(); }
   if (ctrl && e.key === '=') { e.preventDefault(); changeFontSize(1); }
   if (ctrl && e.key === '-') { e.preventDefault(); changeFontSize(-1); }
   if (e.key === 'Escape' && state.searchVisible) toggleSearch();
@@ -1503,6 +1535,7 @@ els.btnToc.addEventListener('click', toggleTOC);
 els.btnSearch.addEventListener('click', toggleSearch);
 els.btnFontUp.addEventListener('click', () => changeFontSize(1));
 els.btnFontDown.addEventListener('click', () => changeFontSize(-1));
+els.btnFullWidth.addEventListener('click', toggleFullWidth);
 els.searchClose.addEventListener('click', toggleSearch);
 els.searchNext.addEventListener('click', searchNext);
 els.searchPrev.addEventListener('click', searchPrev);
@@ -1516,6 +1549,7 @@ async function init() {
   els.fileInput.accept = getBrowserAccept();
   loadTheme();
   loadFontSize();
+  loadFullWidth();
   renderWelcome();
   await initTauri();
   void syncNativeWindowTheme(state.theme);

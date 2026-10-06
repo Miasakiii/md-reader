@@ -8,10 +8,18 @@
 
 - GFM 任务列表：`- [ ]` / `- [x]` 渲染为 checkbox，且强制不可交互（`enabled: false`）——阅读器里的勾选动作不写回文档
 - frontmatter 折叠展示：文档开头的 `---…---` 元数据块渲染为折叠式属性表，不再按水平线或标题渲染；仅支持简单 `key: value` 与列表，未闭合或无法解析时回退为原文渲染
+- 铺满模式：`Ctrl+Shift+F` 或工具栏按钮在正文限宽居中与铺满窗口宽度之间切换，偏好随主题、字号一并持久化
+- 新增 `src/js/preferences.js`：主题、字号与铺满模式收敛到 `md-reader-preferences` 单一命名空间（版本号 + 类型校验 + 读取失败回退默认值），替代此前散落的 `md-reader-theme` / `md-reader-font-size` 两个键
 
 ### Changed
 
 - 渲染管线从 `app.js` 抽出为 `src/js/markdown-render.js`：Markdown 引擎、frontmatter 剥离与消毒后处理集中在一个纯模块中，`app.js` 相应减少 57 行。消毒器改为注入式，便于在没有 DOM window 的 Node 测试环境覆盖渲染契约（13 个新增用例）
+
+### Security
+
+- 生产 CSP 收紧：移除 `'unsafe-inline'`、`'unsafe-eval'` 与开发服务器来源 `http://localhost:1420`。实测生产产物 `dist/index.html` 无内联脚本、bundle 中 `eval(` 与 `new Function` 出现次数均为 0，宽松值无依赖支撑。开发期所需的宽松值改由 Tauri 2 的 `devCsp` 字段承载，生产与开发不再共用同一份策略
+- `script-src` 不含 `unsafe-eval` 与 inline；`style-src` 仍保留 `'unsafe-inline'`（高亮主题切换与进度条写入依赖内联样式，待单独实测后再定）
+- 新增配置契约测试：断言生产 CSP 不含 `unsafe-eval` 与 dev server 来源；断言 `assetProtocol` 一旦启用则静态 `scope` 必须为空（白名单只走运行时逐文件放行）
 
 ### Fixed
 
