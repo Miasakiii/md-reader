@@ -89,3 +89,49 @@ test('the external change listener is registered outside the drag-drop fallback'
     'init must call the external-change listener setup',
   );
 });
+
+test('edit and search buttons expose an active state', async () => {
+  const source = await readFile(new URL('../src/js/app.js', import.meta.url), 'utf8');
+
+  // 编辑模式：激活态挂在 applyModeVisibility（统一切换点）上。
+  const modeVisibility = source.slice(
+    source.indexOf('function applyModeVisibility()'),
+    source.indexOf('function applyDocumentControls()'),
+  );
+  assert.match(
+    modeVisibility,
+    /els\.btnMode\.classList\.toggle\('active', state\.isEditMode\)/,
+    'edit-mode button must reflect the current mode',
+  );
+  assert.match(modeVisibility, /aria-pressed/, 'edit-mode button needs an aria-pressed state');
+
+  // 搜索模式：必须在 toggleSearch 里同步。
+  const toggleSearch = source.slice(
+    source.indexOf('function toggleSearch()'),
+    source.indexOf('function clearSearch()'),
+  );
+  assert.match(
+    toggleSearch,
+    /els\.btnSearch\.classList\.toggle\('active', state\.searchVisible\)/,
+    'search button must reflect the search-panel state',
+  );
+  assert.match(toggleSearch, /aria-pressed/, 'search button needs an aria-pressed state');
+});
+
+test('editor input advances the revision through the session, not the flat state', async () => {
+  const source = await readFile(new URL('../src/js/app.js', import.meta.url), 'utf8');
+  const handler = source.slice(
+    source.indexOf('function onEditorChanged()'),
+    source.indexOf("els.editorTextarea.addEventListener('input'"),
+  );
+
+  // 回归：曾直接递增 state.editRevision，而 isEditorSnapshotCurrent 是
+  // 闭包内自比对，会话里的修订号不更新 → 预览永不刷新。
+  assert.doesNotMatch(
+    handler,
+    /state\.editRevision \+= 1/,
+    'revision must advance through the session so the snapshot guard sees it',
+  );
+  assert.match(handler, /documentSession\.markEdited\(/);
+  assert.match(handler, /syncDocumentStateFromSession\(\)/);
+});

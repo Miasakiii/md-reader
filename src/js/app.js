@@ -988,6 +988,10 @@ function applyModeVisibility() {
   els.readerView.classList.toggle('hidden', state.isEditMode);
   els.editorView.classList.toggle('hidden', !state.isEditMode);
   els.statusMode.textContent = state.isEditMode ? '编辑' : '阅读';
+  // 按钮激活态：与搜索/侧栏/铺满按钮一致。放在这个统一切换点，
+  // 切文档、只读回退、按钮点击三条路径都会同步。
+  els.btnMode.classList.toggle('active', state.isEditMode);
+  els.btnMode.setAttribute('aria-pressed', state.isEditMode ? 'true' : 'false');
 }
 
 function applyDocumentControls() {
@@ -1406,6 +1410,9 @@ els.tocContent.addEventListener('click', e => {
 function toggleSearch() {
   state.searchVisible = !state.searchVisible;
   els.searchBar.classList.toggle('hidden', !state.searchVisible);
+  // 按钮激活态：与侧栏/铺满按钮一致，让「当前处于搜索模式」可见。
+  els.btnSearch.classList.toggle('active', state.searchVisible);
+  els.btnSearch.setAttribute('aria-pressed', state.searchVisible ? 'true' : 'false');
   if (state.searchVisible) {
     els.searchInput.focus();
     els.searchInput.select();
@@ -1521,8 +1528,10 @@ els.editorTextarea.addEventListener('keydown', e => {
 let previewTimer = null;
 function onEditorChanged() {
   if (state.readOnly || state.documentSwitchPending) return;
-  state.editRevision += 1;
-  state.isDirty = isDraftDirty(els.editorTextarea.value, state.persistedContent);
+  // 修订号经会话推进：`isEditorSnapshotCurrent` 是闭包内自比对，若只改
+  // 扁平 state 而不同步会话，守卫会读到会话里过期的修订号，预览永不刷新。
+  documentSession.markEdited(els.editorTextarea.value);
+  syncDocumentStateFromSession();
   setDocumentIdentity(state.filePath, state.isDirty);
   const snapshot = {
     generation: state.documentGeneration,
