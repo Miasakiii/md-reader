@@ -7,6 +7,7 @@
 ### Fixed
 
 - 阅读进度写入改用可恢复的安全写（同目录临时文件 + 同步 + 原子替换，并保留 `.bak`）：`progress.json` 内容损坏时不再被单条记录整体覆盖而静默丢失其余文档的进度，写入中断后可从备份恢复
+- DOMPurify 升级至 3.4.16：修复 `IN_PLACE` 模式下 `afterSanitize` 钩子遗留分离子树事件处理器导致的 DOM XSS（GHSA-p98j-92pf-mc4p，CVSS 2.3）；markdown-it 升级至 14.3.2：修复 `linkify: true` 下两处二次复杂度路径导致几百 KB 文档可阻塞事件循环数十秒的问题（GHSA-253c-mchw-3w2r），本项目已启用 `linkify`
 
 ## [1.3.0] - 2026-08-30
 
