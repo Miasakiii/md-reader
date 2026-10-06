@@ -4,10 +4,17 @@
 
 ## [Unreleased]
 
+## [1.3.2] - 2026-10-07
+
 ### Added
 
-- 外部修改监听：当前文档在应用之外被改动时，状态栏出现提示并提供「重载」。**不自动重载、不自动合并**——有未保存草稿时走既有切换保护（保存/放弃/取消），不静默覆盖
+- 外部修改监听：当前文档在应用之外被改动时，右下角弹出常驻提示并提供「重载 / 忽略」。**不自动重载、不自动合并**——有未保存草稿时走既有切换保护（保存/放弃/取消），不静默覆盖。关闭弹窗后状态栏保留常驻小提示与重载入口，直到重载或换文档
 - 新增 `src/js/external-change.js` 与 `src-tauri/src/watcher.rs`：监听**父目录**而非文件本身（抗「写临时文件再 rename」的原子保存），500ms 防抖合并事件，同目录引用计数去重，保存后 1200ms 自保存抑制窗口（前后端各一份）
+
+### Fixed
+
+- 外部修改事件订阅落在 `initNativeTauriDragDrop()` 的 fallback 分支中，而原生分支成功即提前返回，导致订阅从未注册、提示永不出现
+- 外部修改提示的重载后失效：曾用 `documentGeneration` 识别「旧文档的迟到通知」，但重载同一文件同样会递增代次，使第一次提示之后的改动全被丢弃。现只按路径判定——同一文档的迟到通知与实时事件语义等价，切换文档由路径不匹配拦截
 
 ## [1.3.1] - 2026-10-06
 
@@ -145,7 +152,8 @@
 - 轻量级 Markdown 阅读器（Tauri 2）
 - 三种主题、目录导航、全文搜索、轻量编辑、阅读进度与窗口记忆
 
-[Unreleased]: https://github.com/Miasakiii/md-reader/compare/v1.3.1...HEAD
+[Unreleased]: https://github.com/Miasakiii/md-reader/compare/v1.3.2...HEAD
+[1.3.2]: https://github.com/Miasakiii/md-reader/compare/v1.3.1...v1.3.2
 [1.3.1]: https://github.com/Miasakiii/md-reader/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/Miasakiii/md-reader/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/Miasakiii/md-reader/compare/v1.1.2...v1.2.0
