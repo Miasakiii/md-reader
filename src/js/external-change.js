@@ -60,12 +60,6 @@ function normalizePath(value) {
 /**
  * 监听控制器。负责命令调用与事件订阅，状态判定全部委托给纯函数。
  */
-// 诊断：与后端写同一份日志。用户在 release 下看不到 console，必须落盘。
-function diagnostic(message) {
-  const line = `[js][${Date.now()}] ${message}\n`;
-  console.debug(line.trim());
-  globalThis.__TAURI__?.core?.invoke?.('append_watch_diagnostic', { line }).catch(() => {});
-}
 
 export function createExternalChangeWatcher({
   invoke,
@@ -96,11 +90,9 @@ export function createExternalChangeWatcher({
     unwatchedPath = filePath;
     try {
       await invoke('watch_document_command', { documentPath: filePath });
-      diagnostic(`watching started: ${filePath}`);
     } catch (error) {
       // 监听失败不阻断阅读：外部提示是增强，不是必需能力。
       unwatchedPath = null;
-      diagnostic(`watch failed: ${String(error)}`);
     }
   }
 
@@ -124,14 +116,11 @@ export function createExternalChangeWatcher({
   }
 
   async function handleEvent(changedPath) {
-    diagnostic(`event received: ${String(changedPath)}`);
     const st = getDocumentState();
-    diagnostic(`state: filePath=${String(st.filePath)} generation=${st.documentGeneration}`);
     // 前端抑制窗口：保存后立刻回来的事件不算外部修改。
     // `lastSelfSaveAt` 为 0 表示本次会话还没保存过——此时**不得**抑制，
     // 否则会话刚开始的第一个外部事件会被误吞。
     if (lastSelfSaveAt > 0 && now() - lastSelfSaveAt < SELF_SAVE_WINDOW_MS) {
-      diagnostic('suppressed by self-save window');
       return;
     }
 
@@ -148,10 +137,8 @@ export function createExternalChangeWatcher({
       documentPath: state.filePath,
       readOnly: state.readOnly,
     });
-    diagnostic(`classify outcome: ${JSON.stringify(outcome)}`);
     if (outcome.action !== 'notify') return;
 
-      diagnostic('calling onNotify');
     onNotify?.({
       path: changedPath,
       hasDraft: Boolean(state.isDirty),
