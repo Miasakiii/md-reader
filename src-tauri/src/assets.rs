@@ -315,53 +315,6 @@ mod tests {
         fs::remove_dir_all(&ceiling).unwrap();
     }
 
-    // 临时探针：验证 CI 上主目录天花板修复是否生效。验证后删除。
-    #[test]
-    fn ci_probe_home_ceiling_semantics() {
-        let temp = std::env::temp_dir();
-        let home = dirs::home_dir().unwrap();
-        let root = temp.join("md-reader-probe-home");
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(root.join("a.png"), b"png").unwrap();
-        let document = root.join("guide.md");
-        std::fs::write(&document, b"# x").unwrap();
-
-        let canonical_doc = std::fs::canonicalize(&document).unwrap();
-        let canonical_home = std::fs::canonicalize(&home).unwrap_or(home.clone());
-        let canonical_root = std::fs::canonicalize(&root).unwrap();
-
-        println!("PROBE temp_dir      = {}", temp.display());
-        println!("PROBE home_dir      = {}", home.display());
-        println!("PROBE canonical doc = {}", canonical_doc.display());
-        println!("PROBE canonical root= {}", canonical_root.display());
-        println!(
-            "PROBE doc starts_with home = {}",
-            canonical_doc.starts_with(&canonical_home)
-        );
-        println!(
-            "PROBE home_ceiling() = {:?}",
-            home_ceiling(&document).map(|p| p.display().to_string())
-        );
-        println!(
-            "PROBE temp_dir is symlink = {}",
-            std::fs::symlink_metadata(&temp)
-                .map(|m| m.file_type().is_symlink())
-                .unwrap_or(true)
-        );
-
-        let allowed = resolve_references(&document, &["a.png"]).unwrap();
-        println!(
-            "PROBE allowed count = {} -> {:?}",
-            allowed.len(),
-            allowed
-                .iter()
-                .map(|p| p.display().to_string())
-                .collect::<Vec<_>>()
-        );
-        std::fs::remove_dir_all(&root).ok();
-    }
-
     #[test]
     fn the_home_ceiling_only_applies_to_documents_inside_the_home_directory() {
         // 文档在主目录之外（/tmp、外接盘、网络盘）时不设天花板，
