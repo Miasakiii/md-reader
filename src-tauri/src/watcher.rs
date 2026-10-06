@@ -442,4 +442,3 @@ pub fn unwatch_document_command(
 ) {
     state.unwatch(Path::new(&document_path));
 }
-
