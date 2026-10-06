@@ -21,11 +21,17 @@ use tauri::Manager;
 use crate::file_types::BackendError;
 use crate::safe_file;
 
-/// 主目录天花板：任何允许根都不得越过它。
-fn home_ceiling() -> Option<PathBuf> {
-    dirs::home_dir()
-        .and_then(|home| fs::canonicalize(home).ok())
-        .or_else(dirs::home_dir)
+/// 主目录天花板：文档位于主目录之内时，任何允许根都不得越过它。
+///
+/// 文档在主目录之外时返回 `None`（不设天花板）：`/tmp`、外接盘、网络盘上的
+/// 文档若被主目录规则拦下，本地图片会一律失效——这正是 CI 上 Ubuntu runner
+/// 的 `/tmp` 夹具全数失败的原因。此时边界仍由「允许根 ⊆ 文档目录或仓库根」
+/// 保证，而允许根是从文档自身推导的，不存在越界面。
+fn home_ceiling(document_file: &Path) -> Option<PathBuf> {
+    let home = dirs::home_dir()?;
+    let home = fs::canonicalize(&home).unwrap_or(home);
+    let document_file = fs::canonicalize(document_file).ok()?;
+    document_file.starts_with(&home).then_some(home)
 }
 
 /// 从 `document_path` 向上求允许根：命中 `.git` 的仓库根，或文档所在目录。
@@ -124,7 +130,7 @@ fn resolve_references(
             "无法确定文档所在目录的资源允许根",
         )
     })?;
-    let ceiling = home_ceiling();
+    let ceiling = home_ceiling(document_path);
 
     let mut allowed: Vec<PathBuf> = Vec::new();
     for reference in references {
@@ -177,6 +183,12 @@ mod tests {
     static TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
     /// 唯一临时目录：同一条测试内可能需要嵌套目录树，仅靠名称会互相覆盖。
+    ///
+    /// 注意 `std::env::temp_dir()` 在 Unix 上可能返回符号链接（macOS 的
+    /// `/tmp -> /private/tmp`，见 rust-lang/rust#100824），而 `resolve_asset`
+    /// 刻意用 `O_NOFOLLOW` 拒绝链接。`canonicalize` 会把末段解析掉，因此
+    /// 中间仍含链接的路径在测试里会被生产逻辑正确拒绝——那是刻意边界，
+    /// 夹具不应依赖它不发生。
     fn temp_dir(name: &str) -> PathBuf {
         let seq = TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let base = std::env::temp_dir().join(format!(
@@ -301,6 +313,88 @@ mod tests {
         assert!(inside.starts_with(&ceiling));
         assert!(!sibling.starts_with(&ceiling));
         fs::remove_dir_all(&ceiling).unwrap();
+    }
+
+    // 临时探针：验证 CI 上主目录天花板修复是否生效。验证后删除。
+    #[test]
+    fn ci_probe_home_ceiling_semantics() {
+        let temp = std::env::temp_dir();
+        let home = dirs::home_dir().unwrap();
+        let root = temp.join("md-reader-probe-home");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("a.png"), b"png").unwrap();
+        let document = root.join("guide.md");
+        std::fs::write(&document, b"# x").unwrap();
+
+        let canonical_doc = std::fs::canonicalize(&document).unwrap();
+        let canonical_home = std::fs::canonicalize(&home).unwrap_or(home.clone());
+        let canonical_root = std::fs::canonicalize(&root).unwrap();
+
+        println!("PROBE temp_dir      = {}", temp.display());
+        println!("PROBE home_dir      = {}", home.display());
+        println!("PROBE canonical doc = {}", canonical_doc.display());
+        println!("PROBE canonical root= {}", canonical_root.display());
+        println!(
+            "PROBE doc starts_with home = {}",
+            canonical_doc.starts_with(&canonical_home)
+        );
+        println!(
+            "PROBE home_ceiling() = {:?}",
+            home_ceiling(&document).map(|p| p.display().to_string())
+        );
+        println!(
+            "PROBE temp_dir is symlink = {}",
+            std::fs::symlink_metadata(&temp)
+                .map(|m| m.file_type().is_symlink())
+                .unwrap_or(true)
+        );
+
+        let allowed = resolve_references(&document, &["a.png"]).unwrap();
+        println!(
+            "PROBE allowed count = {} -> {:?}",
+            allowed.len(),
+            allowed
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn the_home_ceiling_only_applies_to_documents_inside_the_home_directory() {
+        // 文档在主目录之外（/tmp、外接盘、网络盘）时不设天花板，
+        // 否则这些位置的文档会一张本地图片都显示不出来。
+        let root = temp_dir("outside-home");
+        write_file(&root.join("guide.md"), "# 指南");
+        write_file(&root.join("a.png"), "png");
+        let document = root.join("guide.md");
+
+        let home = dirs::home_dir().unwrap();
+        let inside_home = document.starts_with(fs::canonicalize(&home).unwrap_or(home.clone()));
+        assert_eq!(
+            home_ceiling(&document),
+            inside_home.then(|| fs::canonicalize(&home).unwrap_or(home)),
+            "ceiling must be present only when the document lives under the home directory"
+        );
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_document_outside_the_home_directory_still_gets_its_assets_authorized() {
+        // CI 上的真实场景：Ubuntu runner 的临时目录不在 /home/runner 之下。
+        let root = temp_dir("tmp-like");
+        commit_repo(&root);
+        write_file(&root.join("guide.md"), "# 指南");
+        write_file(&root.join("a.png"), "png");
+
+        let allowed = authorize(&root.join("guide.md"), &["a.png"]);
+        assert_eq!(
+            allowed,
+            vec![root.join("a.png").to_string_lossy().into_owned()]
+        );
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
