@@ -127,6 +127,26 @@ test('the production CSP stays free of unsafe-eval while dev keeps it', () => {
   }
 });
 
+test('image sources allow https for remote images without opening other directives', () => {
+  const tauriConfig = readProjectJson('src-tauri/tauri.conf.json');
+  const csp = tauriConfig.app.security.csp;
+
+  // 文档里的 `![](https://…)` 必须能加载：img-src 缺 https: 时一律破图。
+  const imgSrc = csp.split(';').find(part => part.trim().startsWith('img-src'));
+  assert.ok(imgSrc, 'expected an img-src directive');
+  assert.match(imgSrc, /https:/, 'img-src must allow remote https images');
+
+  // 放行图片来源不应顺带放宽其他指令——逐条锁定。
+  for (const directive of ['default-src', 'script-src', 'connect-src']) {
+    const value = csp.split(';').find(part => part.trim().startsWith(directive));
+    assert.doesNotMatch(
+      value ?? '',
+      /https:/,
+      `${directive} must not inherit the https: source from img-src`,
+    );
+  }
+});
+
 test('the package test script scopes Node.js test discovery to repository tests', () => {
   const packageJson = readProjectJson('package.json');
   const packageLock = readProjectJson('package-lock.json');
