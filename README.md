@@ -16,12 +16,13 @@
 - 💾 **阅读进度** — 自动保存/恢复每个文件的滚动位置
 - 🪟 **窗口记忆** — 自动记住窗口大小和位置
 - 📌 **最近文件** — 欢迎页展示最近 8 个文件，点击即可重新打开
+- 📚 **文件目录** — 打开过的文档自动登记为侧栏文件目录（与文章目录互斥），支持右键移出记录、移到系统回收站，缺失文件自动清理
 - 📋 **系统文件关联** — 安装包仅注册 `.md` / `.markdown` / `.txt`；`.tex` / `.log` 不接管系统默认程序
 - 📄 **纯文本与 TeX 源码** — `.txt` / `.tex` 按原文显示和编辑，不执行 TeX 渲染或编译；自动识别 UTF-8 / GB18030/GBK
 - 🧾 **日志快照** — `.log` 一次性完整读取、只读展示并支持搜索；文件达到 10 MiB 时先确认
 - 🛡️ **切换保护** — 有未保存修改时，打开另一文档前可保存、放弃或取消
 - 🔒 **安全渲染** — DOMPurify 过滤 Markdown HTML 输出，CSP 限制资源加载
-- 🪶 **极致轻量** — 前端 gzip 约 115KB，安装包 ~8MB
+- 🪶 **极致轻量** — 前端 gzip 约 119KB，安装包 ~8MB
 - 📦 **便携版** — Windows 单 exe 免安装
 
 ## 🚀 快速开始
@@ -146,14 +147,15 @@ md-reader/
 │
 ├── src/
 │   ├── css/
-│   │   ├── base.css            # 主题变量 & 全局样式
+│   │   ├── base.css            # 主题变量、全局样式与滚动条
 │   │   ├── reader.css          # 阅读器排版 & UI 组件
-│   │   ├── editor.css          # 编辑器分屏样式
-│   │   └── scrollbar.css       # 独立滚动条样式
+│   │   └── editor.css          # 编辑器分屏样式
 │   └── js/
-│       ├── app.js              # 主逻辑与文档打开协调
+│       ├── app.js              # 主逻辑、渲染管线与文档打开协调
 │       ├── document-session.js # 未保存切换保护与大日志打开流程
+│       ├── file-library.js     # 文件目录侧栏、右键菜单与回收站流程
 │       ├── file-types.js       # 前端文档类型策略与对话框过滤器
+│       ├── link-router.js      # 渲染后链接分类与系统打开路由
 │       ├── text-decoding.js    # 浏览器严格 UTF-8 / GB18030 解码
 │       ├── window-theme.js     # 页面与原生窗口栏主题同步
 │       └── highlight.js        # 按需加载语言包 (30+)
@@ -164,16 +166,21 @@ md-reader/
 │   ├── build.rs
 │   ├── capabilities/
 │   │   └── default.json        # 权限声明
-│   ├── icons/                  # Tauri 图标集；app-icon-source.png 为规范源图，透明圆角待实施
+│   ├── icons/                  # Tauri 图标集；app-icon-source.png 为规范源图（四角透明圆角已生效）
 │   └── src/
 │       ├── file_types.rs       # 后端类型策略、能力与路径分类
+│       ├── library.rs          # 文件目录、回收站事务与缺失判定
 │       ├── safe_file.rs        # 不跟随链接的读取与原子替换保存
+│       ├── storage.rs          # 配置存储锁、可恢复的 JSON 读写
 │       └── main.rs             # Rust 后端 (文件/进度/历史/CLI)
 │
 ├── tests/
 │   ├── configuration.test.js   # 关联、权限和 CI 配置契约
 │   ├── document-session.test.js # 文档切换与大日志协调测试
+│   ├── file-library.test.js    # 文件目录侧栏、菜单与回收站流程测试
 │   ├── file-types.test.js      # 共享策略与过滤器测试
+│   ├── link-router.test.js     # 链接分类与打开路由测试
+│   ├── markup.test.js          # 入口页面 DOM 契约测试
 │   ├── text-decoding.test.js   # 浏览器编码回退测试
 │   └── window-theme.test.js    # 原生窗口栏主题同步测试
 │
@@ -201,10 +208,10 @@ md-reader/
 
 | 组件 | 原始 | Gzip |
 |------|------|------|
-| CSS | 16.8 KB | 4.3 KB |
-| JS | 305.8 KB | 108.6 KB |
-| HTML | 8.3 KB | 2.5 KB |
-| **前端总计** | **330.9 KB** | **115.3 KB** |
+| CSS | 18.1 KB | 4.5 KB |
+| JS | 314.5 KB | 111.4 KB |
+| HTML | 9.7 KB | 2.8 KB |
+| **前端总计** | **342.3 KB** | **118.7 KB** |
 
 ## ✅ 测试
 
@@ -221,7 +228,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
 ```
 
-测试覆盖共享格式策略、打开/保存过滤器、`.tex` 编辑能力、`.log` 只读与 10 MiB 确认竞态、未保存切换保护、系统文件关联边界、窗口状态恢复，以及前端无文件系统权限。`npm test` 只匹配仓库根目录的 `tests/*.test.js`；`.github/workflows/checks.yml` 使用 Node.js 24，并执行锁定依赖安装、前端测试/构建、Rust 格式检查、测试和 Clippy。
+测试覆盖共享格式策略、打开/保存过滤器、`.tex` 编辑能力、`.log` 只读与 10 MiB 确认竞态、未保存切换保护、文件目录与回收站流程、外链路由分类、系统文件关联边界、窗口状态恢复、入口页面 DOM 契约，以及前端无文件系统权限。`npm test` 只匹配仓库根目录的 `tests/*.test.js`；`.github/workflows/checks.yml` 使用 Node.js 24，并执行锁定依赖安装、前端测试/构建、Rust 格式检查、测试和 Clippy。
 
 ## 📝 更新记录
 

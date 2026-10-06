@@ -307,24 +307,24 @@ fn save_file(path: String, content: String) -> Result<(), BackendError> {
 }
 
 /// 保存阅读进度
+///
+/// 与文件库共用 `storage` 的安全读写：读取走 `read_json_or_default`（先恢复被中断的
+/// 写入，内容损坏时返回错误而不是当成空表），写入走 `write_json_safely`（同目录临时
+/// 文件 + 同步 + 原子替换，并保留 `.bak`）。此前这里读取时把任何错误吞成空表、再用裸
+/// `fs::write` 覆盖，于是一份损坏的 `progress.json` 会被"只含当前这一个文件"的进度
+/// 静默替换掉，其余文档的阅读进度全部丢失；写入中途失败还会留下半截 JSON。
 fn save_reading_progress_at(
     storage_paths: &StoragePaths,
     path: String,
     scroll_pct: f64,
 ) -> Result<(), String> {
     let progress_file = storage_paths.progress_file();
-    let mut map: std::collections::HashMap<String, ReadingProgress> = if progress_file.exists() {
-        serde_json::from_str(&fs::read_to_string(&progress_file).unwrap_or_default())
-            .unwrap_or_default()
-    } else {
-        std::collections::HashMap::new()
-    };
+    let mut map: std::collections::HashMap<String, ReadingProgress> =
+        storage::read_json_or_default(&progress_file)?;
 
     map.insert(path, ReadingProgress { scroll_pct });
 
-    let json = serde_json::to_string_pretty(&map).unwrap_or_default();
-    fs::write(&progress_file, json).map_err(|e| format!("保存进度失败: {}", e))?;
-    Ok(())
+    storage::write_json_safely(&progress_file, &map)
 }
 
 #[tauri::command]
@@ -337,14 +337,13 @@ fn save_reading_progress(
 }
 
 /// 读取阅读进度
+///
+/// 读取失败（文件缺失、内容损坏且无备份可恢复）一律降级为"从头开始"：进度只是阅读
+/// 增强信息，不能阻塞文档打开。被中断的写入由 `storage` 层先尝试恢复。
 fn load_reading_progress_at(storage_paths: &StoragePaths, path: String) -> ReadingProgress {
     let progress_file = storage_paths.progress_file();
-    if !progress_file.exists() {
-        return ReadingProgress::default();
-    }
     let map: std::collections::HashMap<String, ReadingProgress> =
-        serde_json::from_str(&fs::read_to_string(&progress_file).unwrap_or_default())
-            .unwrap_or_default();
+        storage::read_json_or_default(&progress_file).unwrap_or_default();
     map.get(&path).cloned().unwrap_or_default()
 }
 
@@ -1134,5 +1133,45 @@ mod tests {
             storage_paths.progress_file(),
             canonical.join("progress.json")
         );
+    }
+
+    #[test]
+    fn a_corrupt_progress_file_is_reported_instead_of_being_replaced_by_one_entry() {
+        let directory = TestDirectory::new("corrupt-progress");
+        let canonical = directory.path("canonical");
+        fs::create_dir(&canonical).unwrap();
+        let storage_paths = StoragePaths::new(canonical);
+        fs::write(storage_paths.progress_file(), b"{").unwrap();
+
+        let result = save_reading_progress_at(&storage_paths, "a.md".to_string(), 0.5);
+
+        assert!(
+            result.is_err(),
+            "损坏的进度表必须报错，而不是被单条记录整体覆盖"
+        );
+        assert_eq!(
+            fs::read(storage_paths.progress_file()).unwrap(),
+            b"{",
+            "保存失败时原文件必须逐字节保持不变"
+        );
+    }
+
+    #[test]
+    fn an_interrupted_progress_write_recovers_the_last_committed_entries() {
+        let directory = TestDirectory::new("progress-recovery");
+        let canonical = directory.path("canonical");
+        fs::create_dir(&canonical).unwrap();
+        let storage_paths = StoragePaths::new(canonical);
+        save_reading_progress_at(&storage_paths, "a.md".to_string(), 0.25).unwrap();
+
+        // 模拟"替换前中断"：目标缺失，只剩上一份已提交的备份
+        let progress_file = storage_paths.progress_file();
+        fs::rename(&progress_file, storage::backup_path(&progress_file)).unwrap();
+
+        assert_eq!(
+            load_reading_progress_at(&storage_paths, "a.md".to_string()).scroll_pct,
+            0.25
+        );
+        assert!(progress_file.is_file(), "恢复后目标文件必须回到原位");
     }
 }
