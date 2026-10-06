@@ -31,6 +31,7 @@ import {
   rewriteImageSources,
 } from './asset-images.js';
 import { createDocumentSession } from './document-session-state.js';
+import { createCloseGuard } from './close-guard.js';
 import {
   createExternalChangeWatcher,
   planReload,
@@ -167,6 +168,7 @@ const els = {
   themeIconMoon: $('theme-icon-moon'),
   themeIconSepia: $('theme-icon-sepia'),
   dirtySwitchDialog: $('dirty-switch-dialog'),
+  closeAppDialog: $('close-app-dialog'),
   largeLogDialog: $('large-log-dialog'),
   largeLogFileName: $('large-log-file-name'),
   largeLogFileSize: $('large-log-file-size'),
@@ -530,6 +532,45 @@ function promptDialog(dialog, defaultResult = 'cancel') {
 
 function requestDirtySwitchDecision() {
   return promptDialog(els.dirtySwitchDialog, 'cancel');
+}
+
+// ========== Close Guard ==========
+// 退出应用时的未保存保护。Tauri 的关闭事件必须 preventDefault() 拦下，
+// 等用户决策后再真正 close——直接放行就来不及问了。
+const closeGuard = createCloseGuard({
+  getState: () => ({
+    isDirty: state.isDirty,
+    isReadOnly: state.readOnly,
+    hasDocument: documentSession.isOpen(),
+  }),
+  showDialog: () => promptDialog(els.closeAppDialog, 'cancel'),
+  saveFile,
+  performClose: async () => {
+    const windowApi = await getTauriWindow();
+    await windowApi.getCurrentWindow().destroy();
+  },
+  onSaveError: () => showToast(ERROR_MESSAGES.save_failed, 'error'),
+});
+
+/**
+ * 注册关闭拦截。仅原生端需要——浏览器预览的 `beforeunload` 由浏览器
+ * 自己画框，文案不可控，作为兜底即可。
+ */
+async function initCloseGuard() {
+  if (!tauriAvailable) return;
+  try {
+    const windowApi = await getTauriWindow();
+    const current = windowApi.getCurrentWindow();
+    await current.onCloseRequested(async event => {
+      if (closeGuard.isClosing()) return;
+      const { action } = await closeGuard.handleRequest();
+      // 已确认关闭或正在关闭流程中：放行。
+      if (action === 'allow') return;
+      event.preventDefault();
+    });
+  } catch (error) {
+    console.warn('Close guard unavailable:', error?.message || error);
+  }
 }
 
 function confirmLargeLog(inspection) {
@@ -1037,8 +1078,8 @@ async function applyOpenedDocument(documentData, { nativeFile }) {
     throw createClientError('policy_invalid', '前后端文档类型能力不一致');
   }
 
-  clearTimeout(previewTimer);
-  previewTimer = null;
+  if (previewFrame !== null) cancelAnimationFrame(previewFrame);
+  previewFrame = null;
   clearTimeout(state.scrollSaveTimer);
 
   // 文档级字段经会话对象归口：这是 3a 的接入点。当前仍是单文档，
@@ -1227,8 +1268,8 @@ async function performSaveFile({ allowDuringSwitch = false } = {}) {
       refreshTOC();
       updateStatusInfo(savedState.previewContent);
     } else {
-      clearTimeout(previewTimer);
-      previewTimer = null;
+      if (previewFrame !== null) cancelAnimationFrame(previewFrame);
+      previewFrame = null;
       await updateView(savedState.previewContent);
     }
     setFileEncoding('UTF-8');
@@ -1274,8 +1315,8 @@ async function toggleEditMode() {
     applyModeVisibility();
     els.editorTextarea.focus();
   } else {
-    clearTimeout(previewTimer);
-    previewTimer = null;
+    if (previewFrame !== null) cancelAnimationFrame(previewFrame);
+    previewFrame = null;
     state.rawContent = els.editorTextarea.value;
     applyModeVisibility();
     await updateView(state.rawContent);
@@ -1525,7 +1566,7 @@ els.editorTextarea.addEventListener('keydown', e => {
   }
 });
 
-let previewTimer = null;
+let previewFrame = null;
 function onEditorChanged() {
   if (state.readOnly || state.documentSwitchPending) return;
   // 修订号经会话推进：`isEditorSnapshotCurrent` 是闭包内自比对，若只改
@@ -1533,30 +1574,44 @@ function onEditorChanged() {
   documentSession.markEdited(els.editorTextarea.value);
   syncDocumentStateFromSession();
   setDocumentIdentity(state.filePath, state.isDirty);
-  const snapshot = {
-    generation: state.documentGeneration,
-    revision: state.editRevision,
-  };
-  clearTimeout(previewTimer);
-  previewTimer = setTimeout(() => {
-    if (
-      !state.isEditMode
-      || !isEditorSnapshotCurrent(snapshot, {
-        generation: state.documentGeneration,
-        revision: state.editRevision,
-        readOnly: state.readOnly,
-      })
-    ) return;
+
+  // rAF 合帧而非 150ms 防抖：预览随编辑实时更新，不必等保存也不必等
+  // 固定延迟。rAF 天然把同一帧内的多次输入合并成一次渲染。
+  if (previewFrame !== null) cancelAnimationFrame(previewFrame);
+  previewFrame = requestAnimationFrame(() => {
+    previewFrame = null;
+    if (!state.isEditMode || state.readOnly) return;
     const content = els.editorTextarea.value;
-    const previewHtml = renderContent(content);
-    els.previewBody.innerHTML = previewHtml;
-    // 白名单已在打开文档或切换模式时建立，这里复用同一放行集合。
-    if (state.filePath) {
-      rewriteImageSources(els.previewBody, state.allowedAssets, state.filePath);
-    }
-    refreshTOC();
-    updateStatusInfo(content);
-  }, 150);
+    renderPreviewPane(content);
+  });
+}
+
+/**
+ * 重写预览区并保持滚动位置。
+ *
+ * `innerHTML` 赋值会把 scrollTop 归零，导致编辑器的滚动同步映射失效、
+ * 预览「跳回顶部」。渲染前记录比例，渲染后按比例还原——文档变长变短
+ * 都保持视觉位置稳定。
+ */
+function renderPreviewPane(content) {
+  const preview = els.editorPreview;
+  const hadScroll = preview.scrollHeight > preview.clientHeight;
+  const ratio = hadScroll && preview.scrollHeight > 0
+    ? preview.scrollTop / (preview.scrollHeight - preview.clientHeight)
+    : 0;
+
+  els.previewBody.innerHTML = renderContent(content);
+  // 白名单已在打开文档或切换模式时建立，这里复用同一放行集合。
+  if (state.filePath) {
+    rewriteImageSources(els.previewBody, state.allowedAssets, state.filePath);
+  }
+
+  if (hadScroll) {
+    preview.scrollTop = ratio * (preview.scrollHeight - preview.clientHeight);
+  }
+
+  refreshTOC();
+  updateStatusInfo(content);
 }
 
 els.editorTextarea.addEventListener('input', onEditorChanged);
@@ -1835,6 +1890,15 @@ els.searchInput.addEventListener('input', e => doSearch(e.target.value));
 // Save progress on unload
 window.addEventListener('beforeunload', saveProgress);
 
+// 浏览器预览兜底：原生端由 initCloseGuard 精确保留，本条只覆盖
+// `beforeunload` 不可靠的 WebView/浏览器场景（框由浏览器绘制，文案不可控）。
+window.addEventListener('beforeunload', event => {
+  if (state.isDirty && !closeGuard.isClosing()) {
+    event.preventDefault();
+    event.returnValue = '';
+  }
+});
+
 // ========== Init ==========
 async function init() {
   els.fileInput.accept = getBrowserAccept();
@@ -1846,6 +1910,7 @@ async function init() {
   void syncNativeWindowTheme(state.theme);
   await initDragDrop();
   await initExternalChangeListener();
+  await initCloseGuard();
   await loadLibraryFiles();
 
   if (tauriAvailable) {

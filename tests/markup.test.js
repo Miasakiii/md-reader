@@ -135,3 +135,67 @@ test('editor input advances the revision through the session, not the flat state
   assert.match(handler, /documentSession\.markEdited\(/);
   assert.match(handler, /syncDocumentStateFromSession\(\)/);
 });
+
+test('the close-app dialog offers save, discard, and cancel', async () => {
+  const html = await readFile(new URL('../index.html', import.meta.url), 'utf8');
+  const dialog = html.match(/<dialog\b[^>]*id=["']close-app-dialog["'][\s\S]*?<\/dialog>/)?.[0];
+
+  assert.ok(dialog, 'expected #close-app-dialog');
+  assert.match(dialog, /aria-labelledby=["']close-app-title["']/);
+  for (const result of ['cancel', 'discard', 'save']) {
+    assert.match(
+      dialog,
+      new RegExp(`data-dialog-result=["']${result}["']`),
+      `missing ${result} action`,
+    );
+  }
+  // 文案必须说的是「退出应用」而非「打开其他文件」——与切换文档对话框区分。
+  assert.match(dialog, /退出应用/);
+});
+
+test('close interception is registered in init and the fallback is guarded', async () => {
+  const source = await readFile(new URL('../src/js/app.js', import.meta.url), 'utf8');
+
+  assert.match(source, /await initCloseGuard\(\)/, 'init must register the close guard');
+  assert.match(source, /onCloseRequested\(/, 'must intercept the native close request');
+  // 拦截后必须 preventDefault，否则决策来不及。
+  const handler = source.slice(
+    source.indexOf('async function initCloseGuard()'),
+    source.indexOf('function confirmLargeLog'),
+  );
+  assert.match(handler, /event\.preventDefault\(\)/);
+
+  // beforeunload 兜底不得对正在关闭的流程重复拦截。
+  const fallback = source.slice(source.indexOf("window.addEventListener('beforeunload', event =>"));
+  assert.match(fallback, /state\.isDirty/);
+  assert.match(fallback, /!closeGuard\.isClosing\(\)/);
+});
+
+test('the preview pane re-render keeps its scroll position', async () => {
+  const source = await readFile(new URL('../src/js/app.js', import.meta.url), 'utf8');
+  const render = source.slice(
+    source.indexOf('function renderPreviewPane('),
+    source.indexOf("els.editorTextarea.addEventListener('input'"),
+  );
+
+  // innerHTML 赋值会把 scrollTop 归零；渲染前后必须记录/还原比例。
+  assert.match(render, /preview\.scrollTop/, 'must restore the scroll position');
+  assert.match(render, /scrollHeight/, 'must compute the scroll ratio');
+  assert.ok(
+    render.indexOf('scrollTop') < render.lastIndexOf('innerHTML')
+      || render.includes('ratio'),
+    'scroll ratio must be captured before re-rendering',
+  );
+});
+
+test('editor input schedules the preview through rAF, not a timer', async () => {
+  const source = await readFile(new URL('../src/js/app.js', import.meta.url), 'utf8');
+  const handler = source.slice(
+    source.indexOf('function onEditorChanged()'),
+    source.indexOf('function renderPreviewPane('),
+  );
+
+  assert.match(handler, /requestAnimationFrame/, 'preview must repaint on the next frame');
+  assert.doesNotMatch(handler, /setTimeout/, 'a fixed delay makes the preview feel laggy');
+  assert.doesNotMatch(source, /previewTimer/, 'the old debounce timer must be gone');
+});

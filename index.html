@@ -171,6 +171,19 @@
     </div>
   </dialog>
 
+  <!-- 退出应用时的未保存确认 -->
+  <dialog id="close-app-dialog" class="document-dialog" role="dialog" aria-modal="true" aria-labelledby="close-app-title">
+    <div class="document-dialog-content">
+      <h2 id="close-app-title">保存当前修改？</h2>
+      <p>当前文档有尚未保存的修改。退出应用前，请选择如何处理。</p>
+      <div class="document-dialog-actions">
+        <button type="button" class="dialog-btn" data-dialog-result="cancel">取消</button>
+        <button type="button" class="dialog-btn dialog-btn-danger" data-dialog-result="discard">放弃修改</button>
+        <button type="button" class="dialog-btn dialog-btn-primary" data-dialog-result="save">保存并退出</button>
+      </div>
+    </div>
+  </dialog>
+
   <!-- 大日志确认 -->
   <dialog id="large-log-dialog" class="document-dialog" role="dialog" aria-modal="true" aria-labelledby="large-log-title">
     <div class="document-dialog-content">
