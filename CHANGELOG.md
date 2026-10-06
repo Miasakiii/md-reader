@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-10-06
+
 ### Added
 
 - GFM 任务列表：`- [ ]` / `- [x]` 渲染为 checkbox，且强制不可交互（`enabled: false`）——阅读器里的勾选动作不写回文档
@@ -14,19 +16,18 @@
 
 ### Changed
 
-- 渲染管线从 `app.js` 抽出为 `src/js/markdown-render.js`：Markdown 引擎、frontmatter 剥离与消毒后处理集中在一个纯模块中，`app.js` 相应减少 57 行。消毒器改为注入式，便于在没有 DOM window 的 Node 测试环境覆盖渲染契约（13 个新增用例）
+- 渲染管线从 `app.js` 抽出为 `src/js/markdown-render.js`：Markdown 引擎、frontmatter 剥离与消毒后处理集中在一个纯模块中。消毒器改为注入式，便于在没有 DOM window 的 Node 测试环境覆盖渲染契约
 
 ### Security
 
-- 本地图片白名单的安全边界全部在后端（`src-tauri/src/assets.rs`）：静态 `assetProtocol.scope` 留空不写任何通配，白名单只由 `authorize_document_assets_command` 运行时逐文件放行；相对路径按**文档所在目录**解析（而非允许根，否则 `docs/guide.md` 引用 `../assets/x.png` 这类常见写法会失效），`canonicalize` 后必须落在「文档目录或上溯命中 `.git` 的仓库根」之内，且以**用户主目录为天花板**——否则家目录里的一个 `.git` 就能把整个家目录变成资源根。`http(s):`、`data:`、`file:` 与绝对路径一律不改写，目标必须是普通文件（复用 `safe_file` 不跟随链接的打开判定）。原始相对路径保留在 `data-asset-src`，编辑回写与复制地址读它而非改写后的 asset URL
-- 生产 CSP 收紧：移除 `'unsafe-inline'`、`'unsafe-eval'` 与开发服务器来源 `http://localhost:1420`。实测生产产物 `dist/index.html` 无内联脚本、bundle 中 `eval(` 与 `new Function` 出现次数均为 0，宽松值无依赖支撑。开发期所需的宽松值改由 Tauri 2 的 `devCsp` 字段承载，生产与开发不再共用同一份策略
-- `script-src` 不含 `unsafe-eval` 与 inline；`style-src` 仍保留 `'unsafe-inline'`（实测有 8 处 JS 内联样式写入：高亮主题切换、进度条宽度、字号 CSS 变量、右键菜单定位）
-- 新增配置契约测试：断言生产 CSP 不含 `unsafe-eval` 与 dev server 来源；断言 `assetProtocol` 已启用且静态 `scope` 为空、`Cargo.toml` 显式开启 `protocol-asset` feature（缺失会导致 `asset_protocol_scope()` 因 cfg 门控不存在）
+- 本地图片白名单的安全边界全部在后端（`src-tauri/src/assets.rs`）：静态 `assetProtocol.scope` 留空不写任何通配，白名单只由 `authorize_document_assets_command` 运行时逐文件放行；相对路径按**文档所在目录**解析（而非允许根，否则 `docs/guide.md` 引用 `../assets/x.png` 这类常见写法会失效），`canonicalize` 后必须落在「文档目录或上溯命中 `.git` 的仓库根」之内，且以**用户主目录为天花板**——否则家目录里的一个 `.git` 就能把整个家目录变成资源根。`http(s):`、`data:`、`file:` 与绝对路径一律不改写，目标必须是普通文件。原始相对路径保留在 `data-asset-src`
+- 生产 CSP 收紧：移除 `'unsafe-inline'`、`'unsafe-eval'` 与开发服务器来源 `http://localhost:1420`。实测生产产物无内联脚本、bundle 中 `eval(` 与 `new Function` 出现次数均为 0。开发期宽松值改由 Tauri 2 的 `devCsp` 承载。`style-src` 保留 `'unsafe-inline'`（实测 8 处 JS 内联样式写入）
+- DOMPurify 升级至 3.4.16：修复 `IN_PLACE` 模式下 `afterSanitize` 钩子遗留分离子树事件处理器导致的 DOM XSS（GHSA-p98j-92pf-mc4p）
+- markdown-it 升级至 14.3.2：修复 `linkify: true` 下两处二次复杂度路径导致几百 KB 文档可阻塞事件循环数十秒的问题（GHSA-253c-mchw-3w2r），本项目已启用 `linkify`
 
 ### Fixed
 
 - 阅读进度写入改用可恢复的安全写（同目录临时文件 + 同步 + 原子替换，并保留 `.bak`）：`progress.json` 内容损坏时不再被单条记录整体覆盖而静默丢失其余文档的进度，写入中断后可从备份恢复
-- DOMPurify 升级至 3.4.16：修复 `IN_PLACE` 模式下 `afterSanitize` 钩子遗留分离子树事件处理器导致的 DOM XSS（GHSA-p98j-92pf-mc4p，CVSS 2.3）；markdown-it 升级至 14.3.2：修复 `linkify: true` 下两处二次复杂度路径导致几百 KB 文档可阻塞事件循环数十秒的问题（GHSA-253c-mchw-3w2r），本项目已启用 `linkify`
 
 ## [1.3.0] - 2026-08-30
 
@@ -137,7 +138,8 @@
 - 轻量级 Markdown 阅读器（Tauri 2）
 - 三种主题、目录导航、全文搜索、轻量编辑、阅读进度与窗口记忆
 
-[Unreleased]: https://github.com/Miasakiii/md-reader/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/Miasakiii/md-reader/compare/v1.3.1...HEAD
+[1.3.1]: https://github.com/Miasakiii/md-reader/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/Miasakiii/md-reader/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/Miasakiii/md-reader/compare/v1.1.2...v1.2.0
 [1.1.2]: https://github.com/Miasakiii/md-reader/compare/v1.1.1...v1.1.2
