@@ -731,16 +731,43 @@ const externalChangeWatcher = createExternalChangeWatcher({
   },
   listen: async () => () => {},
   getDocumentState: () => state,
-  onNotify: showExternalChangeNotice,
+  onNotify: onExternalChangeDetected,
   reload: () => reloadAfterExternalChange(),
 });
+
+/**
+ * 外部改动的呈现分两层，各司其职：
+ *
+ * 1. **右下角弹窗** —— 首次感知就该看见，附带「重载 / 忽略」两个决策。
+ *    弹窗可关闭：它是一次性提示，不是常驻控件。
+ * 2. **状态栏常驻小提示** —— 弹窗关掉后仍留在状态栏，带重载入口，
+ *    直到重载或换文档才消失。外部改动在磁盘上持续存在，提示也该持续存在。
+ */
+function onExternalChangeDetected({ hasDraft, readOnly }) {
+  const message = hasDraft
+    ? '文件已被外部修改'
+    : readOnly
+      ? '日志已被外部修改'
+      : '文件已被外部修改';
+  const detail = hasDraft
+    ? '当前草稿尚未保存，重载前会先让你决定如何处理'
+    : '磁盘上的内容与当前显示不一致';
+
+  showActionToast({
+    message,
+    detail,
+    actionLabel: '重载',
+    onAction: () => reloadAfterExternalChange(),
+  });
+  showExternalChangeNotice({ hasDraft, readOnly });
+}
 
 function showExternalChangeNotice({ hasDraft, readOnly }) {
   if (!els.externalChangeNotice) return;
   const text = els.externalChangeNotice.querySelector('.external-change-text');
   if (text) {
     text.textContent = hasDraft
-      ? '文件已被外部修改，当前草稿未保存'
+      ? '文件已被外部修改，草稿未保存'
       : readOnly
         ? '日志已被外部修改'
         : '文件已被外部修改';
@@ -749,6 +776,7 @@ function showExternalChangeNotice({ hasDraft, readOnly }) {
 }
 
 function hideExternalChangeNotice() {
+  hideActionToast();
   els.externalChangeNotice?.classList.add('hidden');
 }
 
@@ -1504,6 +1532,87 @@ function showToast(message, type = 'error') {
     toast.classList.remove('show');
     setTimeout(() => toast.remove(), 300);
   }, 4500);
+}
+
+/**
+ * 带操作按钮的右下角浮层。外部修改提示用它——状态栏文字太弱，
+ * 而这是一个需要用户决策的事件（是否重载）。
+ *
+ * 不自动消失：事件在磁盘改动持续存在期间一直有效，用户的编辑可能更久。
+ * 关闭由用户显式操作，或在文档切换/保存后由调用方撤下。
+ */
+function showActionToast({ message, detail = '', actionLabel, onAction }) {
+  document.getElementById('external-change-toast')?.remove();
+
+  const toast = document.createElement('div');
+  toast.id = 'external-change-toast';
+  toast.className = 'toast toast-action';
+  toast.setAttribute('role', 'alertdialog');
+  toast.setAttribute('aria-live', 'assertive');
+  toast.setAttribute('aria-label', message);
+
+  const text = document.createElement('div');
+  text.className = 'toast-action-text';
+  text.textContent = message;
+  toast.appendChild(text);
+
+  if (detail) {
+    const hint = document.createElement('div');
+    hint.className = 'toast-action-detail';
+    hint.textContent = detail;
+    toast.appendChild(hint);
+  }
+
+  const actions = document.createElement('div');
+  actions.className = 'toast-action-buttons';
+
+  const action = document.createElement('button');
+  action.type = 'button';
+  action.className = 'toast-action-primary';
+  action.textContent = actionLabel;
+  action.addEventListener('click', () => {
+    hideActionToast();
+    onAction?.();
+  });
+  actions.appendChild(action);
+
+  const dismiss = document.createElement('button');
+  dismiss.type = 'button';
+  dismiss.className = 'toast-action-secondary';
+  dismiss.textContent = '忽略';
+  dismiss.setAttribute('aria-label', '忽略此提示');
+  dismiss.addEventListener('click', hideActionToast);
+  actions.appendChild(dismiss);
+
+  toast.appendChild(actions);
+  document.body.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add('show'));
+  // 首个可聚焦元素即主操作，键盘用户可直接回车。
+  action.focus();
+
+  // Esc 关闭：浮层可键盘撤销，不该逼用户去够鼠标。
+  const onKeyDown = event => {
+    if (event.key !== 'Escape') return;
+    hideActionToast();
+    document.removeEventListener('keydown', onKeyDown, true);
+  };
+  document.addEventListener('keydown', onKeyDown, true);
+  // 关闭时一并摘掉监听，避免文档生命周期结束后仍在监听。
+  const observer = new MutationObserver(() => {
+    if (document.getElementById('external-change-toast')) return;
+    document.removeEventListener('keydown', onKeyDown, true);
+    observer.disconnect();
+  });
+  observer.observe(document.body, { childList: true });
+
+  return toast;
+}
+
+function hideActionToast() {
+  const toast = document.getElementById('external-change-toast');
+  if (!toast) return;
+  toast.classList.remove('show');
+  setTimeout(() => toast.remove(), 300);
 }
 
 // ========== Drag & Drop ==========

@@ -1001,3 +1001,78 @@ html.full-width .markdown-body {
     max-width: 120px;
   }
 }
+
+/* 外部修改提示：右下角常驻浮层
+   与底部居中的 toast 分工：普通 toast 4.5 秒自动消失；这个是决策型事件，
+   需用户明确处理，故常驻右下角并带「重载 / 忽略」。 */
+.toast-action {
+  left: auto;
+  right: 20px;
+  bottom: 44px;
+  transform: translateX(0) translateY(12px);
+  max-width: min(92vw, 380px);
+  min-width: 280px;
+  padding: 14px 16px;
+  border: 1px solid var(--dialog-danger, #8b2f26);
+  border-radius: 12px;
+  background: var(--bg-card);
+  color: var(--text);
+  box-shadow: var(--shadow-lg);
+  pointer-events: auto;
+}
+
+.toast-action.show {
+  transform: translateX(0) translateY(0);
+}
+
+.toast-action-text {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--dialog-danger, #8b2f26);
+}
+
+.toast-action-detail {
+  margin-top: 4px;
+  font-size: 0.84rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.toast-action-buttons {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.toast-action-primary,
+.toast-action-secondary {
+  flex: 1;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 0.88rem;
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.toast-action-primary {
+  border: 1px solid var(--dialog-danger, #8b2f26);
+  background: var(--dialog-danger, #8b2f26);
+  color: #fff;
+}
+
+.toast-action-primary:hover {
+  background: var(--dialog-primary-hover, #773116);
+  border-color: var(--dialog-primary-hover, #773116);
+}
+
+.toast-action-secondary {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.toast-action-secondary:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
