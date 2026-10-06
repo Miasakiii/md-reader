@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- GFM 任务列表：`- [ ]` / `- [x]` 渲染为 checkbox，且强制不可交互（`enabled: false`）——阅读器里的勾选动作不写回文档
+- frontmatter 折叠展示：文档开头的 `---…---` 元数据块渲染为折叠式属性表，不再按水平线或标题渲染；仅支持简单 `key: value` 与列表，未闭合或无法解析时回退为原文渲染
+
+### Changed
+
+- 渲染管线从 `app.js` 抽出为 `src/js/markdown-render.js`：Markdown 引擎、frontmatter 剥离与消毒后处理集中在一个纯模块中，`app.js` 相应减少 57 行。消毒器改为注入式，便于在没有 DOM window 的 Node 测试环境覆盖渲染契约（13 个新增用例）
+
 ### Fixed
 
 - 阅读进度写入改用可恢复的安全写（同目录临时文件 + 同步 + 原子替换，并保留 `.bak`）：`progress.json` 内容损坏时不再被单条记录整体覆盖而静默丢失其余文档的进度，写入中断后可从备份恢复

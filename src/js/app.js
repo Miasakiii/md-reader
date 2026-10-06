@@ -1,8 +1,3 @@
-import MarkdownIt from 'markdown-it';
-import DOMPurify from 'dompurify';
-import hljs from './highlight.js';
-import markdownItAnchor from 'markdown-it-anchor';
-import markdownItToc from 'markdown-it-toc-done-right';
 import {
   LARGE_LOG_WARNING_BYTES,
   classifyDocumentPath,
@@ -23,6 +18,11 @@ import {
 } from './document-session.js';
 import { readBrowserTextFile } from './text-decoding.js';
 import {
+  createMarkdownEngine,
+  escapeHtml,
+  renderDocumentHtml,
+} from './markdown-render.js';
+import {
   applyTrashedOutcome,
   createFileLibraryView,
   nextSidePanel,
@@ -42,29 +42,7 @@ import {
 } from './window-theme.js';
 
 // ========== Markdown Engine ==========
-const md = new MarkdownIt({
-  html: true,
-  linkify: true,
-  typographer: true,
-  highlight(str, lang) {
-    if (lang && hljs.getLanguage(lang)) {
-      try {
-        return hljs.highlight(str, { language: lang }).value;
-      } catch (_) {}
-    }
-    return md.utils.escapeHtml(str);
-  }
-});
-
-md.use(markdownItAnchor, {
-  permalink: false,
-  slugify: s => s.toLowerCase().replace(/[^\w\u4e00-\u9fff]+/g, '-').replace(/(^-|-$)/g, ''),
-});
-
-md.use(markdownItToc, {
-  containerClass: 'toc-container',
-  listType: 'ul',
-});
+const md = createMarkdownEngine();
 
 // ========== State ==========
 const state = {
@@ -381,13 +359,6 @@ function onScroll(scrollEl) {
 }
 
 // ========== Helpers ==========
-function escapeHtml(str) {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
 
 const ERROR_MESSAGES = {
   policy_invalid: '文档类型策略无效，应用已阻止文件访问',
@@ -731,29 +702,8 @@ function renderWelcome() {
 }
 
 // ========== Render ==========
-function renderPlainText(content) {
-  return `<div class="plain-text">${escapeHtml(content)}</div>`;
-}
-
 function renderContent(content, renderMode = state.renderMode) {
-  return renderMode === 'plain' ? renderPlainText(content) : renderMarkdown(content);
-}
-
-function renderMarkdown(content) {
-  const tocRe = /^\[\[toc\]\]\s*$/gim;
-  const processed = content.replace(tocRe, '%%TOC%%');
-  let html = md.render(processed).replace(
-    /<p>%%TOC%%<\/p>/,
-    '<nav class="toc-inline"></nav>'
-  );
-  html = DOMPurify.sanitize(html, {
-    ADD_TAGS: ['nav'],
-    ADD_ATTR: ['class'],
-  });
-  return html.replace(
-    /<pre><code/g,
-    '<pre><button type="button" class="code-copy">复制</button><code'
-  );
+  return renderDocumentHtml(md, content, renderMode);
 }
 
 function getReaderContext() {

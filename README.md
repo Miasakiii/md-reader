@@ -12,6 +12,8 @@
 - 📑 **目录导航** — 自动生成 TOC，滚动高亮当前章节
 - 🔍 **全文搜索** — Markdown、纯文本和只读日志均可搜索，实时高亮并逐个定位
 - ✏️ **轻量编辑** — `.md` / `.markdown` 分屏预览，`.txt` / `.tex` 纯文本编辑
+- ✅ **GFM 任务列表** — `- [ ]` / `- [x]` 渲染为不可交互 checkbox，勾选动作不写回文档
+- 🗂️ **Frontmatter** — 文档开头的 `---…---` 元数据块折叠展示为属性表，未闭合时按原文渲染
 - 📂 **多入口打开** — 对话框、拖拽、CLI 与应用内打开事件支持 `.md` / `.markdown` / `.txt` / `.tex` / `.log`
 - 💾 **阅读进度** — 自动保存/恢复每个文件的滚动位置
 - 🪟 **窗口记忆** — 自动记住窗口大小和位置
@@ -22,7 +24,7 @@
 - 🧾 **日志快照** — `.log` 一次性完整读取、只读展示并支持搜索；文件达到 10 MiB 时先确认
 - 🛡️ **切换保护** — 有未保存修改时，打开另一文档前可保存、放弃或取消
 - 🔒 **安全渲染** — DOMPurify 过滤 Markdown HTML 输出，CSP 限制资源加载
-- 🪶 **极致轻量** — 前端 gzip 约 119KB，安装包 ~8MB
+- 🪶 **极致轻量** — 前端 gzip 约 121KB，安装包 ~8MB
 - 📦 **便携版** — Windows 单 exe 免安装
 
 ## 🚀 快速开始
@@ -151,11 +153,12 @@ md-reader/
 │   │   ├── reader.css          # 阅读器排版 & UI 组件
 │   │   └── editor.css          # 编辑器分屏样式
 │   └── js/
-│       ├── app.js              # 主逻辑、渲染管线与文档打开协调
+│       ├── app.js              # 主逻辑与文档打开协调
 │       ├── document-session.js # 未保存切换保护与大日志打开流程
 │       ├── file-library.js     # 文件目录侧栏、右键菜单与回收站流程
 │       ├── file-types.js       # 前端文档类型策略与对话框过滤器
 │       ├── link-router.js      # 渲染后链接分类与系统打开路由
+│       ├── markdown-render.js  # Markdown 引擎、frontmatter 剥离与消毒后处理
 │       ├── text-decoding.js    # 浏览器严格 UTF-8 / GB18030 解码
 │       ├── window-theme.js     # 页面与原生窗口栏主题同步
 │       └── highlight.js        # 按需加载语言包 (30+)
@@ -180,6 +183,7 @@ md-reader/
 │   ├── file-library.test.js    # 文件目录侧栏、菜单与回收站流程测试
 │   ├── file-types.test.js      # 共享策略与过滤器测试
 │   ├── link-router.test.js     # 链接分类与打开路由测试
+│   ├── markdown-render.test.js # 渲染管线、任务列表与 frontmatter 契约
 │   ├── markup.test.js          # 入口页面 DOM 契约测试
 │   ├── text-decoding.test.js   # 浏览器编码回退测试
 │   └── window-theme.test.js    # 原生窗口栏主题同步测试
@@ -208,10 +212,10 @@ md-reader/
 
 | 组件 | 原始 | Gzip |
 |------|------|------|
-| CSS | 18.1 KB | 4.5 KB |
-| JS | 314.5 KB | 111.4 KB |
+| CSS | 19.0 KB | 4.7 KB |
+| JS | 319.5 KB | 113.8 KB |
 | HTML | 9.7 KB | 2.8 KB |
-| **前端总计** | **342.3 KB** | **118.7 KB** |
+| **前端总计** | **348.2 KB** | **121.2 KB** |
 
 ## ✅ 测试
 

@@ -429,6 +429,77 @@
   transform: scale(1.1);
 }
 
+/* 任务列表 checkbox 渲染为不可交互，阅读时的勾选动作不写回文档 */
+.markdown-body li input[type="checkbox"]:disabled {
+  cursor: default;
+  opacity: 0.75;
+}
+
+.markdown-body li.task-list-item {
+  list-style: none;
+  margin-left: -1.2em;
+}
+
+.markdown-body ul.contains-task-list {
+  padding-left: 1.4em;
+}
+
+.markdown-body .task-list-item-label {
+  cursor: default;
+}
+
+/* Frontmatter 元数据 */
+.frontmatter {
+  margin: 0 0 1.6em;
+  padding: 0.9em 1.1em;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+  line-height: 1.7;
+}
+
+.frontmatter ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.frontmatter-list {
+  padding-left: 1.4em;
+  position: relative;
+}
+
+.frontmatter-list::before {
+  content: '';
+  position: absolute;
+  left: 0.45em;
+  top: 0.72em;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.frontmatter-key {
+  color: var(--text-secondary);
+}
+
+.frontmatter-colon {
+  margin: 0 0.35em;
+  color: var(--text-muted);
+}
+
+.frontmatter-value {
+  color: var(--text);
+}
+
+.frontmatter-list .frontmatter-key::after {
+  content: ':';
+  margin-left: 0.35em;
+}
+
 /* Blockquote */
 .markdown-body blockquote {
   margin: 1.5em 0;
