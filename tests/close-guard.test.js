@@ -99,14 +99,16 @@ test('saving closes only when the save actually succeeded', () => {
   );
 });
 
-test('a clean document closes the window without any dialog', async () => {
+test('a clean document lets the native close proceed without touching the window', async () => {
   const { guard, calls } = guardHarness({ isDirty: false });
 
   const result = await guard.handleRequest();
 
   assert.deepEqual(result, { action: 'allow' });
   assert.equal(calls.dialogs, 0);
-  assert.equal(calls.closes, 1);
+  // 关键：`onCloseRequested` 的语义是「可以关就放行」。擅自 destroy 会绕过
+  // 原生窗口管理，连正常的关闭按钮与 Alt+F4 都会被强杀。
+  assert.equal(calls.closes, 0, '放行时不得调用 performClose');
 });
 
 test('a dirty document saves then closes on confirmation', async () => {

@@ -68,10 +68,10 @@ export function createCloseGuard({
       closeInProgress,
     });
 
-    if (decision.action === 'allow') {
-      await performClose();
-      return { action: 'allow' };
-    }
+    // 无需询问：交回原生关闭流程。**绝不能在这里调用 performClose**——
+    // `onCloseRequested` 的语义是「可以关就放行」，擅自 destroy 会绕过
+    // 原生窗口管理（连正常的关闭按钮、Alt+F4 也会被强杀）。
+    if (decision.action === 'allow') return { action: 'allow' };
 
     const answer = await showDialog();
 

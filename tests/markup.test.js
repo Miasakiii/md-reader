@@ -199,3 +199,25 @@ test('editor input schedules the preview through rAF, not a timer', async () => 
   assert.doesNotMatch(handler, /setTimeout/, 'a fixed delay makes the preview feel laggy');
   assert.doesNotMatch(source, /previewTimer/, 'the old debounce timer must be gone');
 });
+
+test('the close guard never destroys the window on a plain pass-through', async () => {
+  const source = await readFile(new URL('../src/js/close-guard.js', import.meta.url), 'utf8');
+
+  // 回归：曾在「无需询问」分支里调用 performClose()（即 Tauri 的
+  // destroy()），导致连正常的关闭按钮与 Alt+F4 都被强杀——窗控失效。
+  // `onCloseRequested` 的正确用法是：可以关就 return 放行，只有用户
+  // 明确确认后才 destroy。
+  const passThrough = source.slice(
+    source.indexOf("if (decision.action === 'allow')"),
+    source.indexOf('const answer = await showDialog()'),
+  );
+  assert.doesNotMatch(
+    passThrough,
+    /performClose\(\)/,
+    'a pass-through close must not destroy the window',
+  );
+
+  // 确认后仍需真正 destroy，否则点了「保存并退出」窗口不关。
+  const confirmed = source.slice(source.indexOf('closeInProgress = true;'));
+  assert.match(confirmed, /performClose\(\)/, 'a confirmed close must actually close the window');
+});
