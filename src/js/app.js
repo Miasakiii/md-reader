@@ -14,7 +14,6 @@ import {
   isDraftDirty,
   isEditorSnapshotCurrent,
   openDocumentWithGuards,
-  reconcileSavedEditorState,
 } from './document-session.js';
 import { readBrowserTextFile } from './text-decoding.js';
 import {
@@ -31,6 +30,7 @@ import {
   collectRelativeImageReferences,
   rewriteImageSources,
 } from './asset-images.js';
+import { createDocumentSession } from './document-session-state.js';
 import {
   createExternalChangeWatcher,
   planReload,
@@ -91,6 +91,38 @@ const state = {
   libraryError: '',
   platform: /Win/i.test(globalThis.navigator?.platform ?? '') ? 'windows' : 'posix',
 };
+
+// ========== Document Session (3a) ==========
+// 文档级字段的归口对象。当前仍单文档，`state` 与会话一一对应；
+// 3b 引入多标签后，切换活动标签只需换绑会话实例。
+const documentSession = createDocumentSession();
+
+/**
+ * 把会话状态同步回扁平 `state`。
+ *
+ * 迁移期的单向同步：会话是文档级字段的唯一写入口，`state` 是只读镜像。
+ * 3b 完成 `state.xxx` → `session.snapshot().xxx` 的全量改写后即可删除本函数
+ * 与 `state` 中的文档级字段。
+ */
+function syncDocumentStateFromSession() {
+  const doc = documentSession.snapshot();
+  state.filePath = doc.filePath;
+  state.nativeFile = doc.nativeFile;
+  state.rawContent = doc.rawContent;
+  state.persistedContent = doc.persistedContent;
+  state.kind = doc.kind;
+  state.renderMode = doc.renderMode;
+  state.readOnly = doc.readOnly;
+  state.toc = doc.toc;
+  state.sizeBytes = doc.sizeBytes;
+  state.encoding = doc.encoding;
+  state.isDirty = doc.isDirty;
+  state.documentGeneration = doc.documentGeneration;
+  state.editRevision = doc.editRevision;
+  state.isEditMode = doc.isEditMode;
+  state.allowedAssets = doc.allowedAssets;
+  state.scrollSaveTimer = doc.scrollSaveTimer;
+}
 
 const themes = THEMES;
 const themeLabels = { light: '浅色', dark: '深色', sepia: '护眼' };
@@ -366,11 +398,12 @@ function onScroll(scrollEl) {
   clearTimeout(state.scrollSaveTimer);
   const path = state.filePath;
   const generation = state.documentGeneration;
-  state.scrollSaveTimer = setTimeout(() => {
+  documentSession.setScrollSaveTimer(setTimeout(() => {
     if (state.filePath === path && state.documentGeneration === generation) {
       void saveProgress();
     }
-  }, 800);
+  }, 800));
+  state.scrollSaveTimer = documentSession.snapshot().scrollSaveTimer;
 
   if (scrollEl && els.progressBar) {
     const pct = scrollPercentage(scrollEl) * 100;
@@ -663,19 +696,9 @@ function applyTrashedUi(path, outcome) {
 }
 
 function returnToWelcome() {
-  state.documentGeneration += 1;
-  state.editRevision = 0;
-  state.filePath = null;
-  state.nativeFile = false;
-  state.rawContent = '';
-  state.persistedContent = '';
-  state.kind = null;
-  state.renderMode = null;
-  state.readOnly = false;
-  state.toc = false;
-  state.sizeBytes = 0;
-  state.isDirty = false;
-  state.isEditMode = false;
+  // 经会话归口：代次随之递增，使在途的保存/监听回调全部失效。
+  documentSession.close();
+  syncDocumentStateFromSession();
   if (state.activeSidePanel === 'toc') state.activeSidePanel = 'none';
   clearSearch();
   setFileEncoding('UTF-8');
@@ -834,7 +857,8 @@ async function authorizeAssetsFor(html) {
 async function updateView(content) {
   const html = renderContent(content);
   const allowed = await authorizeAssetsFor(html);
-  state.allowedAssets = allowed;
+  documentSession.setAllowedAssets(allowed);
+  state.allowedAssets = documentSession.snapshot().allowedAssets;
 
   els.markdownBody.innerHTML = html;
   if (allowed.length > 0) {
@@ -881,7 +905,10 @@ function refreshTOC() {
 }
 
 function setFileEncoding(encoding) {
-  state.encoding = encoding || 'UTF-8';
+  // 经会话归口。刻意用 setEncoding 而非 open()——代次只在换/关文档时
+  // 推进，编码更新不得让在途的保存、滚动与监听回调误判为过期。
+  documentSession.setEncoding(encoding);
+  state.encoding = documentSession.snapshot().encoding;
   if (els.statusEncoding) {
     if (!state.filePath) {
       els.statusEncoding.textContent = state.encoding;
@@ -1009,20 +1036,24 @@ async function applyOpenedDocument(documentData, { nativeFile }) {
   clearTimeout(previewTimer);
   previewTimer = null;
   clearTimeout(state.scrollSaveTimer);
-  state.scrollSaveTimer = null;
-  state.documentGeneration += 1;
-  state.editRevision = 0;
-  state.filePath = documentData.path;
-  state.nativeFile = nativeFile;
-  state.rawContent = String(documentData.content ?? '');
-  state.persistedContent = state.rawContent;
-  state.kind = documentData.kind || type.kind;
-  state.renderMode = documentData.renderMode || type.renderMode;
-  state.readOnly = documentData.readOnly ?? !type.editable;
-  state.toc = type.toc;
-  state.sizeBytes = Number(documentData.sizeBytes) || 0;
-  state.isDirty = false;
-  if (state.readOnly) state.isEditMode = false;
+
+  // 文档级字段经会话对象归口：这是 3a 的接入点。当前仍是单文档，
+  // 会话与扁平 state 一一对应；3b 引入多标签后，每次切换活动标签只需
+  // 换绑一个会话实例，字段赋值点无需改动。
+  documentSession.open(
+    {
+      path: documentData.path,
+      content: documentData.content ?? '',
+      kind: documentData.kind || type.kind,
+      renderMode: documentData.renderMode || type.renderMode,
+      readOnly: documentData.readOnly ?? !type.editable,
+      toc: type.toc,
+      sizeBytes: Number(documentData.sizeBytes) || 0,
+      encoding: documentData.encoding,
+    },
+    { nativeFile },
+  );
+  syncDocumentStateFromSession();
 
   clearSearch();
   applyModeVisibility();
@@ -1160,23 +1191,25 @@ async function performSaveFile({ allowDuringSwitch = false } = {}) {
     const currentEditorContent = state.isEditMode
       ? els.editorTextarea.value
       : state.rawContent;
-    const savedState = reconcileSavedEditorState({
+
+    // 归并经会话：保留保存请求发出后继续输入的内容，既有语义不变。
+    documentSession.reconcileSave({
       savedContent: content,
-      currentEditorContent,
-      revisionAtStart,
-      currentRevision: state.editRevision,
+      currentContent: currentEditorContent,
     });
 
     state.filePath = savedPath;
     state.nativeFile = tauriAvailable;
-    state.persistedContent = savedState.persistedContent;
-    state.rawContent = savedState.rawContent;
     state.kind = type.kind;
     state.renderMode = type.renderMode;
     state.readOnly = false;
     state.toc = type.toc;
     state.sizeBytes = new TextEncoder().encode(content).byteLength;
-    state.isDirty = savedState.isDirty;
+    syncDocumentStateFromSession();
+    const savedState = {
+      isDirty: documentSession.snapshot().isDirty,
+      previewContent: documentSession.snapshot().rawContent,
+    };
     applyDocumentControls();
     // 保存会触发文件系统事件；登记抑制窗口，避免保存后立刻弹出
     // 「文件已被外部修改」的假提示。
