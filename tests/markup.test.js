@@ -55,3 +55,37 @@ test('index exposes the external change notice with an accessible reload action'
   assert.match(reload, /type=["']button["']/);
   assert.match(reload, /class=["'][^"']*external-change-action/, 'reload must be styleable');
 });
+
+test('the external change listener is registered outside the drag-drop fallback', async () => {
+  const source = await readFile(new URL('../src/js/app.js', import.meta.url), 'utf8');
+
+  // `initNativeTauriDragDrop` 的原生分支成功即 return，fallback 块永不执行。
+  // 事件订阅若落在该块内，等于永远不注册。
+  const nativeInit = source.slice(
+    source.indexOf('async function initNativeTauriDragDrop()'),
+    source.indexOf('async function initDragDrop()'),
+  );
+  assert.doesNotMatch(
+    nativeInit,
+    /document-changed-externally/,
+    'the drag-drop fallback branch returns early, so it must not own event subscriptions',
+  );
+
+  // 订阅必须存在于独立函数中，并由 init 调用。
+  const listenerInit = source.slice(
+    source.indexOf('async function initExternalChangeListener()'),
+    source.indexOf('async function initDragDrop()') > 0
+      ? source.indexOf('// ========== Keyboard Shortcuts ==========')
+      : source.length,
+  );
+  assert.match(
+    listenerInit,
+    /document-changed-externally/,
+    'expected a dedicated external-change listener registration',
+  );
+  assert.match(
+    source,
+    /await initExternalChangeListener\(\)/,
+    'init must call the external-change listener setup',
+  );
+});

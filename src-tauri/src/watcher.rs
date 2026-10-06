@@ -20,6 +20,7 @@
 //! 只管当前打开文档的外部编辑。
 
 use std::collections::HashMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
@@ -206,6 +207,11 @@ pub fn watch_document(
             )
         })?;
 
+    diagnostic(&format!(
+        "watching directory: {} for {}",
+        target.directory.display(),
+        target.file_name
+    ));
     state.senders.insert(target.directory.clone(), tx);
 
     // guard 必须先释放：事件线程需要独立地重新取锁。
@@ -222,6 +228,11 @@ pub fn watch_document(
         // 注销底层 watch，函数返回即失效。移动进来即可保持注册。
         let _watcher = watcher;
         while let Ok(Ok(event)) = rx.recv() {
+            diagnostic(&format!(
+                "raw event: kind={:?} paths={:?}",
+                event.kind,
+                event.paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>()
+            ));
             // 防抖：丢弃窗口内的后续事件。
             loop {
                 match rx.recv_timeout(DEBOUNCE) {
@@ -233,9 +244,11 @@ pub fn watch_document(
             }
 
             if !is_content_change(event.kind) {
+                diagnostic(&format!("skipped: not a content change ({:?})", event.kind));
                 continue;
             }
             if !event_touches_file(&event, &target_for_thread) {
+                diagnostic("skipped: event does not touch the target file");
                 continue;
             }
 
@@ -249,14 +262,40 @@ pub fn watch_document(
                 Err(_) => true,
             };
             if suppressed {
+                diagnostic("skipped: inside self-save suppression window");
                 continue;
             }
 
-            let _ = app.emit("document-changed-externally", &path_for_thread);
+            diagnostic(&format!(
+                "emitting document-changed-externally: {}",
+                path_for_thread.display()
+            ));
+            if let Err(error) = app.emit("document-changed-externally", &path_for_thread) {
+                diagnostic(&format!("emit failed: {error}"));
+            }
         }
     });
 
     Ok(())
+}
+
+/// 诊断日志：release 构建没有控制台窗口，stderr 用户看不到。
+/// 写入临时目录下的 `md-reader-watch.log`，供实测时查看。
+fn diagnostic(message: &str) {
+    use std::io::Write;
+    let path = std::env::temp_dir().join("md-reader-watch.log");
+    if let Ok(mut file) = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let millis = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let _ = writeln!(file, "[{millis}] {message}");
+    }
 }
 
 fn notify_config() -> notify::Config {

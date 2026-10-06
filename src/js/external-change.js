@@ -82,6 +82,11 @@ export function createExternalChangeWatcher({
   async function watchCurrent() {
     const { filePath, nativeFile, renderMode } = getDocumentState();
     if (!filePath || !nativeFile || renderMode !== 'markdown') {
+      console.debug('[watch] skip: no native markdown document', {
+        hasPath: Boolean(filePath),
+        nativeFile,
+        renderMode,
+      });
       await stopWatching();
       return;
     }
@@ -91,11 +96,12 @@ export function createExternalChangeWatcher({
     watchedGeneration = getDocumentState().documentGeneration;
     try {
       await invoke('watch_document_command', { documentPath: filePath });
+      console.debug('[watch] watching', filePath);
     } catch (error) {
       // 监听失败不阻断阅读：外部提示是增强，不是必需能力。
       unwatchedPath = null;
       watchedGeneration = null;
-      console.warn('External change watch failed:', error);
+      console.warn('[watch] failed to start:', error);
     }
   }
 
@@ -120,10 +126,14 @@ export function createExternalChangeWatcher({
   }
 
   async function handleEvent(changedPath) {
+    console.debug('[watch] event received', changedPath);
     // 前端抑制窗口：保存后立刻回来的事件不算外部修改。
     // `lastSelfSaveAt` 为 0 表示本次会话还没保存过——此时**不得**抑制，
     // 否则会话刚开始的第一个外部事件会被误吞。
-    if (lastSelfSaveAt > 0 && now() - lastSelfSaveAt < SELF_SAVE_WINDOW_MS) return;
+    if (lastSelfSaveAt > 0 && now() - lastSelfSaveAt < SELF_SAVE_WINDOW_MS) {
+      console.debug('[watch] event suppressed by self-save window');
+      return;
+    }
 
     const state = getDocumentState();
     // 监听建立时的代次：事件抵达时若代次已变，说明是旧文档的迟到通知。

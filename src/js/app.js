@@ -723,7 +723,12 @@ function renderWelcome() {
 
 // ========== External Change ==========
 const externalChangeWatcher = createExternalChangeWatcher({
-  invoke: (command, payload) => tauriInvoke(command, payload),
+  // 走 getTauriInvoke() 而非直接引用 `tauriInvoke`：后者在模块顶层求值时
+  // 还是 null，且 Tauri 的 invoke 可能依赖 this 绑定。
+  invoke: async (command, payload) => {
+    const invoke = await getTauriInvoke();
+    return invoke(command, payload);
+  },
   listen: async () => () => {},
   getDocumentState: () => state,
   onNotify: showExternalChangeNotice,
@@ -1564,11 +1569,6 @@ async function initNativeTauriDragDrop() {
     await listen(TauriEvent.DRAG_LEAVE, () => hideDropOverlay());
     await listen(TauriEvent.DRAG_DROP, event => handleDropPaths(event.payload?.paths || []));
 
-    // 外部修改提示：只提示 + 提供重载，不自动重载、不自动合并。
-    await listen('document-changed-externally', event => {
-      void externalChangeWatcher.handleEvent(event.payload);
-    });
-
     console.log('Tauri drag-drop event listeners registered');
     return true;
   } catch (e) {
@@ -1582,6 +1582,26 @@ async function initNativeTauriDragDrop() {
 async function initDragDrop() {
   if (!tauriAvailable) return;
   await initNativeTauriDragDrop();
+}
+
+/**
+ * 订阅外部修改事件。
+ *
+ * 独立于拖放初始化：`initNativeTauriDragDrop` 的原生分支成功后会提前
+ * return，把订阅放在它的 fallback 块里等于永远不执行。
+ */
+async function initExternalChangeListener() {
+  if (!tauriAvailable) return;
+  try {
+    const { listen } = await getTauriEvent();
+    await listen('document-changed-externally', event => {
+      void externalChangeWatcher.handleEvent(event.payload);
+    });
+    console.log('External change listener registered');
+  } catch (error) {
+    // 订阅失败只影响外部修改提示，不阻断文档阅读。
+    console.warn('External change listener unavailable:', error?.message || error);
+  }
 }
 
 // ========== Keyboard Shortcuts ==========
@@ -1674,6 +1694,7 @@ async function init() {
   await initTauri();
   void syncNativeWindowTheme(state.theme);
   await initDragDrop();
+  await initExternalChangeListener();
   await loadLibraryFiles();
 
   if (tauriAvailable) {
