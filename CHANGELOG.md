@@ -20,7 +20,7 @@
 
 ### Security
 
-- 本地图片白名单的安全边界全部在后端（`src-tauri/src/assets.rs`）：静态 `assetProtocol.scope` 留空不写任何通配，白名单只由 `authorize_document_assets_command` 运行时逐文件放行；相对路径按**文档所在目录**解析（而非允许根，否则 `docs/guide.md` 引用 `../assets/x.png` 这类常见写法会失效），`canonicalize` 后必须落在「文档目录或上溯命中 `.git` 的仓库根」之内，且以**用户主目录为天花板**——否则家目录里的一个 `.git` 就能把整个家目录变成资源根。`http(s):`、`data:`、`file:` 与绝对路径一律不改写，目标必须是普通文件。原始相对路径保留在 `data-asset-src`
+- 本地图片白名单的安全边界全部在后端（`src-tauri/src/assets.rs`）：静态 `assetProtocol.scope` 留空不写任何通配，白名单只由 `authorize_document_assets_command` 运行时逐文件放行；相对路径按**文档所在目录**解析（而非允许根，否则 `docs/guide.md` 引用 `../assets/x.png` 这类常见写法会失效），`canonicalize` 后必须落在「文档目录或上溯命中 `.git` 的仓库根」之内；文档位于主目录之内时另加**用户主目录天花板**，否则家目录里的一个 `.git` 就能把整个家目录变成资源根。`http(s):`、`data:`、`file:` 与绝对路径一律不改写，目标必须是普通文件。原始相对路径保留在 `data-asset-src`
 - 生产 CSP 收紧：移除 `'unsafe-inline'`、`'unsafe-eval'` 与开发服务器来源 `http://localhost:1420`。实测生产产物无内联脚本、bundle 中 `eval(` 与 `new Function` 出现次数均为 0。开发期宽松值改由 Tauri 2 的 `devCsp` 承载。`style-src` 保留 `'unsafe-inline'`（实测 8 处 JS 内联样式写入）
 - DOMPurify 升级至 3.4.16：修复 `IN_PLACE` 模式下 `afterSanitize` 钩子遗留分离子树事件处理器导致的 DOM XSS（GHSA-p98j-92pf-mc4p）
 - markdown-it 升级至 14.3.2：修复 `linkify: true` 下两处二次复杂度路径导致几百 KB 文档可阻塞事件循环数十秒的问题（GHSA-253c-mchw-3w2r），本项目已启用 `linkify`
