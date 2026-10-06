@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod assets;
 mod file_types;
 mod library;
 mod safe_file;
@@ -532,6 +533,7 @@ fn main() {
             library::remove_library_file,
             library::trash_library_file,
             library::document_path_status,
+            assets::authorize_document_assets_command,
             get_cli_args,
         ])
         .build(tauri::generate_context!())

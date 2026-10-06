@@ -9,6 +9,7 @@
 - GFM 任务列表：`- [ ]` / `- [x]` 渲染为 checkbox，且强制不可交互（`enabled: false`）——阅读器里的勾选动作不写回文档
 - frontmatter 折叠展示：文档开头的 `---…---` 元数据块渲染为折叠式属性表，不再按水平线或标题渲染；仅支持简单 `key: value` 与列表，未闭合或无法解析时回退为原文渲染
 - 铺满模式：`Ctrl+Shift+F` 或工具栏按钮在正文限宽居中与铺满窗口宽度之间切换，偏好随主题、字号一并持久化
+- 文档内相对路径图片正常显示（`![](images/a.png)`）：资产协议启用，白名单按文档所在目录逐文件运行时放行
 - 新增 `src/js/preferences.js`：主题、字号与铺满模式收敛到 `md-reader-preferences` 单一命名空间（版本号 + 类型校验 + 读取失败回退默认值），替代此前散落的 `md-reader-theme` / `md-reader-font-size` 两个键
 
 ### Changed
@@ -17,9 +18,10 @@
 
 ### Security
 
+- 本地图片白名单的安全边界全部在后端（`src-tauri/src/assets.rs`）：静态 `assetProtocol.scope` 留空不写任何通配，白名单只由 `authorize_document_assets_command` 运行时逐文件放行；相对路径按**文档所在目录**解析（而非允许根，否则 `docs/guide.md` 引用 `../assets/x.png` 这类常见写法会失效），`canonicalize` 后必须落在「文档目录或上溯命中 `.git` 的仓库根」之内，且以**用户主目录为天花板**——否则家目录里的一个 `.git` 就能把整个家目录变成资源根。`http(s):`、`data:`、`file:` 与绝对路径一律不改写，目标必须是普通文件（复用 `safe_file` 不跟随链接的打开判定）。原始相对路径保留在 `data-asset-src`，编辑回写与复制地址读它而非改写后的 asset URL
 - 生产 CSP 收紧：移除 `'unsafe-inline'`、`'unsafe-eval'` 与开发服务器来源 `http://localhost:1420`。实测生产产物 `dist/index.html` 无内联脚本、bundle 中 `eval(` 与 `new Function` 出现次数均为 0，宽松值无依赖支撑。开发期所需的宽松值改由 Tauri 2 的 `devCsp` 字段承载，生产与开发不再共用同一份策略
-- `script-src` 不含 `unsafe-eval` 与 inline；`style-src` 仍保留 `'unsafe-inline'`（高亮主题切换与进度条写入依赖内联样式，待单独实测后再定）
-- 新增配置契约测试：断言生产 CSP 不含 `unsafe-eval` 与 dev server 来源；断言 `assetProtocol` 一旦启用则静态 `scope` 必须为空（白名单只走运行时逐文件放行）
+- `script-src` 不含 `unsafe-eval` 与 inline；`style-src` 仍保留 `'unsafe-inline'`（实测有 8 处 JS 内联样式写入：高亮主题切换、进度条宽度、字号 CSS 变量、右键菜单定位）
+- 新增配置契约测试：断言生产 CSP 不含 `unsafe-eval` 与 dev server 来源；断言 `assetProtocol` 已启用且静态 `scope` 为空、`Cargo.toml` 显式开启 `protocol-asset` feature（缺失会导致 `asset_protocol_scope()` 因 cfg 门控不存在）
 
 ### Fixed
 

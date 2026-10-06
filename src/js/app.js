@@ -27,6 +27,10 @@ import {
   THEMES,
   createPreferenceStore,
 } from './preferences.js';
+import {
+  collectRelativeImageReferences,
+  rewriteImageSources,
+} from './asset-images.js';
 
 const preferences = createPreferenceStore(globalThis.localStorage);
 import {
@@ -74,6 +78,7 @@ const state = {
   fontSize: 16,
   fullWidth: false,
   activeSidePanel: 'none',
+  allowedAssets: [],
   searchVisible: false,
   searchResults: [],
   searchIndex: -1,
@@ -715,6 +720,51 @@ function renderContent(content, renderMode = state.renderMode) {
   return renderDocumentHtml(md, content, renderMode);
 }
 
+/**
+ * 文档内相对路径图片的放行集合。
+ *
+ * 白名单必须在 HTML 写入正文状态**之前**完成：首帧 `<img>` 请求与白名单
+ * 写入存在竞态，首帧失败不会自动重试。浏览器预览与纯文本模式没有资产
+ * 协议需求，直接返回空集合。
+ */
+async function authorizeAssetsFor(html) {
+  if (!state.filePath || !state.nativeFile || state.renderMode !== 'markdown') return [];
+  const references = collectRelativeImageReferences(html);
+  if (references.length === 0) return [];
+
+  try {
+    return await tauriInvoke('authorize_document_assets_command', {
+      documentPath: state.filePath,
+      references,
+    });
+  } catch (error) {
+    // 放行失败不阻断阅读：图片保持原引用，交给浏览器处理。
+    console.warn('Local asset authorization failed:', error);
+    return [];
+  }
+}
+
+async function updateView(content) {
+  const html = renderContent(content);
+  const allowed = await authorizeAssetsFor(html);
+  state.allowedAssets = allowed;
+
+  els.markdownBody.innerHTML = html;
+  if (allowed.length > 0) {
+    rewriteImageSources(els.markdownBody, allowed, state.filePath);
+  }
+
+  els.previewBody.innerHTML = state.readOnly ? '' : html;
+  if (allowed.length > 0 && !state.readOnly) {
+    rewriteImageSources(els.previewBody, allowed, state.filePath);
+  }
+
+  if (state.readOnly) els.editorTextarea.value = '';
+  els.tocContent.innerHTML = buildTOC();
+  updateStatusInfo(content);
+  observeHeadings();
+}
+
 function getReaderContext() {
   if (state.isEditMode) {
     return {
@@ -740,16 +790,6 @@ function buildTOC() {
 
 function refreshTOC() {
   els.tocContent.innerHTML = buildTOC();
-  observeHeadings();
-}
-
-function updateView(content) {
-  const html = renderContent(content);
-  els.markdownBody.innerHTML = html;
-  els.previewBody.innerHTML = state.readOnly ? '' : html;
-  if (state.readOnly) els.editorTextarea.value = '';
-  els.tocContent.innerHTML = buildTOC();
-  updateStatusInfo(content);
   observeHeadings();
 }
 
@@ -868,7 +908,7 @@ function applyDocumentControls() {
   els.btnToc.setAttribute('aria-label', els.btnToc.title);
 }
 
-function applyOpenedDocument(documentData, { nativeFile }) {
+async function applyOpenedDocument(documentData, { nativeFile }) {
   const type = classifyDocumentPath(documentData.path);
   if (type.kind === 'unsupported') throw createClientError('unsupported_type');
   if (
@@ -901,7 +941,7 @@ function applyOpenedDocument(documentData, { nativeFile }) {
   applyModeVisibility();
   els.editorTextarea.value = state.readOnly ? '' : state.rawContent;
   applyDocumentControls();
-  updateView(state.rawContent);
+  await updateView(state.rawContent);
   setFileEncoding(documentData.encoding);
 
   setDocumentIdentity(documentData.path);
@@ -935,7 +975,7 @@ async function performDocumentOpen({
     if (result.status !== 'opened') return false;
 
     if (state.filePath) await saveProgress();
-    applyOpenedDocument(result.document, { nativeFile });
+    await applyOpenedDocument(result.document, { nativeFile });
     if (refreshLibraryFiles && nativeFile) {
       await registerOpenedDocument(result.document.path);
     }
@@ -1049,12 +1089,15 @@ async function performSaveFile({ allowDuringSwitch = false } = {}) {
     applyDocumentControls();
     if (savedState.isDirty) {
       els.previewBody.innerHTML = renderContent(savedState.previewContent);
+      if (state.filePath) {
+        rewriteImageSources(els.previewBody, state.allowedAssets, state.filePath);
+      }
       refreshTOC();
       updateStatusInfo(savedState.previewContent);
     } else {
       clearTimeout(previewTimer);
       previewTimer = null;
-      updateView(savedState.previewContent);
+      await updateView(savedState.previewContent);
     }
     setFileEncoding('UTF-8');
     setDocumentIdentity(savedPath, savedState.isDirty);
@@ -1078,7 +1121,7 @@ function saveFile() {
 }
 
 // ========== Mode Toggle ==========
-function toggleEditMode() {
+async function toggleEditMode() {
   if (documentInteractionLocked()) {
     showToast('文档操作正在进行，请稍候', 'info');
     return;
@@ -1092,6 +1135,9 @@ function toggleEditMode() {
   if (state.isEditMode) {
     els.editorTextarea.value = state.rawContent;
     els.previewBody.innerHTML = renderContent(state.rawContent);
+    if (state.filePath) {
+      rewriteImageSources(els.previewBody, state.allowedAssets, state.filePath);
+    }
     refreshTOC();
     applyModeVisibility();
     els.editorTextarea.focus();
@@ -1100,7 +1146,7 @@ function toggleEditMode() {
     previewTimer = null;
     state.rawContent = els.editorTextarea.value;
     applyModeVisibility();
-    updateView(state.rawContent);
+    await updateView(state.rawContent);
   }
 }
 
@@ -1365,7 +1411,12 @@ function onEditorChanged() {
       })
     ) return;
     const content = els.editorTextarea.value;
-    els.previewBody.innerHTML = renderContent(content);
+    const previewHtml = renderContent(content);
+    els.previewBody.innerHTML = previewHtml;
+    // 白名单已在打开文档或切换模式时建立，这里复用同一放行集合。
+    if (state.filePath) {
+      rewriteImageSources(els.previewBody, state.allowedAssets, state.filePath);
+    }
     refreshTOC();
     updateStatusInfo(content);
   }, 150);

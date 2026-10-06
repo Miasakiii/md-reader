@@ -9,7 +9,9 @@ edition = "2021"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# protocol-asset 提供 Manager::asset_protocol_scope()，用于文档内相对路径图片
+# 的运行时逐文件放行。不在 tauri 的 default features 中，必须显式开启。
+tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-single-instance = "2"

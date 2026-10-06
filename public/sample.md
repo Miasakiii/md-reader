@@ -1,3 +1,11 @@
+---
+title: MD Reader 示例文档
+status: stable
+tags:
+  - demo
+  - markdown
+---
+
 # MD Reader 示例文档
 
 欢迎使用 **MD Reader** — 一个轻量级 Markdown 与纯文本文档阅读器！
@@ -12,11 +20,15 @@
 
 ### 链接与图片
 
-> 当前候选版本尚未完成系统浏览器外链路由；点击外部链接可能会在应用窗口内打开。
-
 [访问 GitHub](https://github.com)
 
-![示例图片](https://picsum.photos/600/300)
+![远程示例图片](https://picsum.photos/600/300)
+
+![本地示例图片](sample-assets/local-image.png)
+
+![缺失的本地图片](sample-assets/not-found.png)
+
+> 本地图片需要后端逐文件放行：相对路径按本文档所在目录解析，越界、符号链接与目录一律拒绝。上方缺失的图片应显示为占位而非加载成功。
 
 ### 引用
 

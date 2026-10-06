@@ -15,6 +15,7 @@
 - ✏️ **轻量编辑** — `.md` / `.markdown` 分屏预览，`.txt` / `.tex` 纯文本编辑
 - ✅ **GFM 任务列表** — `- [ ]` / `- [x]` 渲染为不可交互 checkbox，勾选动作不写回文档
 - 🗂️ **Frontmatter** — 文档开头的 `---…---` 元数据块折叠展示为属性表，未闭合时按原文渲染
+- 🖼️ **本地图片** — 文档内相对路径图片正常显示；白名单按「文档目录 / `.git` 上溯到的仓库根」放行，且以用户主目录为天花板，越界与符号链接一律拒绝
 - 📂 **多入口打开** — 对话框、拖拽、CLI 与应用内打开事件支持 `.md` / `.markdown` / `.txt` / `.tex` / `.log`
 - 💾 **阅读进度** — 自动保存/恢复每个文件的滚动位置
 - 🪟 **窗口记忆** — 自动记住窗口大小和位置
@@ -25,7 +26,7 @@
 - 🧾 **日志快照** — `.log` 一次性完整读取、只读展示并支持搜索；文件达到 10 MiB 时先确认
 - 🛡️ **切换保护** — 有未保存修改时，打开另一文档前可保存、放弃或取消
 - 🔒 **安全渲染** — DOMPurify 过滤 Markdown HTML 输出；生产 CSP 不含 `unsafe-eval`，开发服务器来源只在 `devCsp` 中放行
-- 🪶 **极致轻量** — 前端 gzip 约 121KB，安装包 ~8MB
+- 🪶 **极致轻量** — 前端 gzip 约 122KB，安装包 ~8MB
 - 📦 **便携版** — Windows 单 exe 免安装
 
 ## 🚀 快速开始
@@ -126,9 +127,11 @@ pwsh -File ./scripts/build-release.ps1
 
 ## 🔒 安全
 
-Markdown 渲染后的 HTML 经 [DOMPurify](https://github.com/cure53/DOMPurify) 消毒后再插入 DOM；内容安全策略（CSP）在 `src-tauri/tauri.conf.json` 中限制脚本、样式与外部资源来源。
+Markdown 渲染后的 HTML 经 [DOMPurify](https://github.com/cure53/DOMPurify) 消毒后再插入 DOM；内容安全策略（CSP）在 `src-tauri/tauri.conf.json` 中限制脚本、样式与外部资源来源，生产与开发分别由 `csp` 与 `devCsp` 承载。
 
 前端与 Rust 后端分别校验同一份 `shared/document-types.json`，策略损坏、未知类型、重复扩展名或不安全能力组合都会失败关闭。文件读取和保存由后端命令执行，并拒绝不支持的路径、目录和符号链接；读取时不跟随最终链接，保存使用同目录临时文件完整写入并同步后再原子替换，避免失败时截断原文件。`.log` 的只读限制也在后端独立执行。前端没有 Tauri 文件系统插件权限，系统文件关联则刻意保持在 `.md` / `.markdown` / `.txt`。
+
+文档内相对路径图片通过资产协议加载，安全边界全部在后端：静态 `assetProtocol.scope` 留空（不写任何通配），白名单只由 `authorize_document_assets_command` 在运行时逐文件放行——相对路径按**文档所在目录**解析，`canonicalize` 后必须落在「文档目录或 `.git` 上溯到的仓库根」之内，且以用户主目录为天花板；`http(s):`、`data:`、`file:` 与绝对路径一律不改写。`Cargo.toml` 必须显式开启 `protocol-asset` feature，否则 `Manager::asset_protocol_scope()` 因`cfg` 门控而不存在。
 
 ## 📁 项目结构
 
@@ -157,6 +160,7 @@ md-reader/
 │   └── js/
 │       ├── app.js              # 主逻辑与文档打开协调
 │       ├── document-session.js # 未保存切换保护与大日志打开流程
+│       ├── asset-images.js     # 本地图片引用收集与资产地址重写
 │       ├── file-library.js     # 文件目录侧栏、右键菜单与回收站流程
 │       ├── file-types.js       # 前端文档类型策略与对话框过滤器
 │       ├── link-router.js      # 渲染后链接分类与系统打开路由
@@ -174,6 +178,7 @@ md-reader/
 │   │   └── default.json        # 权限声明
 │   ├── icons/                  # Tauri 图标集；app-icon-source.png 为规范源图（四角透明圆角已生效）
 │   └── src/
+│       ├── assets.rs           # 本地图片白名单：路径校验与资产作用域放行
 │       ├── file_types.rs       # 后端类型策略、能力与路径分类
 │       ├── library.rs          # 文件目录、回收站事务与缺失判定
 │       ├── safe_file.rs        # 不跟随链接的读取与原子替换保存
@@ -181,6 +186,7 @@ md-reader/
 │       └── main.rs             # Rust 后端 (文件/进度/历史/CLI)
 │
 ├── tests/
+│   ├── asset-images.test.js   # 图片引用收集、路径解析与放行判定测试
 │   ├── configuration.test.js   # 关联、权限和 CI 配置契约
 │   ├── document-session.test.js # 文档切换与大日志协调测试
 │   ├── file-library.test.js    # 文件目录侧栏、菜单与回收站流程测试
@@ -193,7 +199,8 @@ md-reader/
 │   └── window-theme.test.js    # 原生窗口栏主题同步测试
 │
 └── public/
-    ├── sample.md               # 示例文档
+    ├── sample.md               # 示例文档（含本地图片与 frontmatter 验收样例）
+    ├── sample-assets/          # 示例文档引用的本地图片
     └── styles/                 # highlight.js 主题 CSS
 ```
 
@@ -217,9 +224,9 @@ md-reader/
 | 组件 | 原始 | Gzip |
 |------|------|------|
 | CSS | 19.0 KB | 4.7 KB |
-| JS | 320.5 KB | 114.2 KB |
+| JS | 322.7 KB | 114.8 KB |
 | HTML | 10.2 KB | 2.8 KB |
-| **前端总计** | **349.8 KB** | **121.7 KB** |
+| **前端总计** | **352.0 KB** | **122.3 KB** |
 
 ## ✅ 测试
 

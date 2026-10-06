@@ -89,18 +89,29 @@ test('Tauri grants only the narrow window mutation needed for theme sync', () =>
   assert.deepEqual(windowMutationPermissions, ['core:window:allow-set-theme']);
 });
 
-test('the asset protocol stays disabled and unscoped until local images land', () => {
+test('the asset protocol stays unscoped and is enabled for local images', () => {
   const tauriConfig = readProjectJson('src-tauri/tauri.conf.json');
   const assetProtocol = tauriConfig.app.security.assetProtocol;
 
-  if (assetProtocol === undefined) return;
-
-  // 一旦启用：enable 必须为 true，且静态 scope 必须留空——白名单只靠
-  // 运行时逐文件放行。任何通配（如 **）都等于给消毒器绕过配全盘钥匙。
+  assert.ok(assetProtocol, 'expected an assetProtocol config block');
   assert.equal(assetProtocol.enable, true);
+
+  // 静态 scope 必须留空——白名单只靠运行时逐文件放行。任何通配（如 **）
+  // 都等于给消毒器绕过配一把全盘钥匙。
   const scope = assetProtocol.scope;
   const patterns = Array.isArray(scope) ? scope : scope?.allow ?? [];
   assert.deepEqual(patterns, []);
+
+  const csp = tauriConfig.app.security.csp;
+  assert.match(csp, /img-src[^;]*asset:/, 'CSP must allow the asset protocol for images');
+});
+
+test('the tauri crate enables protocol-asset for the runtime asset scope', () => {
+  const cargoToml = readProjectFile('src-tauri/Cargo.toml');
+
+  // Manager::asset_protocol_scope() 带 #[cfg(feature = "protocol-asset")] 门控，
+  // 且该 feature 不在 tauri 的 default features 中，缺失会导致编译失败。
+  assert.match(cargoToml, /^tauri = \{ version = "2", features = \[[^\]]*"protocol-asset"/m);
 });
 
 test('the production CSP stays free of unsafe-eval while dev keeps it', () => {
