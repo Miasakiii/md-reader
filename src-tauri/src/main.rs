@@ -5,6 +5,7 @@ mod file_types;
 mod library;
 mod safe_file;
 mod storage;
+mod watcher;
 
 use file_types::{BackendError, DocumentKind, DocumentType, RenderMode};
 use serde::{Deserialize, Serialize};
@@ -520,6 +521,8 @@ fn main() {
             };
 
             app.manage(storage_paths);
+            // 外部修改监听：单一共享状态，文档切换时换目标而不重建。
+            app.manage(std::sync::Arc::new(watcher::DocumentWatchState::default()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -534,6 +537,9 @@ fn main() {
             library::trash_library_file,
             library::document_path_status,
             assets::authorize_document_assets_command,
+            watcher::watch_document_command,
+            watcher::register_self_save_command,
+            watcher::unwatch_document_command,
             get_cli_args,
         ])
         .build(tauri::generate_context!())

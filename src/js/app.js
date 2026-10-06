@@ -31,6 +31,10 @@ import {
   collectRelativeImageReferences,
   rewriteImageSources,
 } from './asset-images.js';
+import {
+  createExternalChangeWatcher,
+  planReload,
+} from './external-change.js';
 
 const preferences = createPreferenceStore(globalThis.localStorage);
 import {
@@ -123,6 +127,8 @@ const els = {
   progressBar: $('reading-progress-bar'),
   statusMode: $('status-mode'),
   statusInfo: $('status-info'),
+  externalChangeNotice: $('external-change-notice'),
+  btnReloadExternal: $('btn-reload-external'),
   statusEncoding: $('status-encoding'),
   fileInput: $('file-input'),
   themeIconSun: $('theme-icon-sun'),
@@ -715,6 +721,54 @@ function renderWelcome() {
   });
 }
 
+// ========== External Change ==========
+const externalChangeWatcher = createExternalChangeWatcher({
+  invoke: (command, payload) => tauriInvoke(command, payload),
+  listen: async () => () => {},
+  getDocumentState: () => state,
+  onNotify: showExternalChangeNotice,
+  reload: () => reloadAfterExternalChange(),
+});
+
+function showExternalChangeNotice({ hasDraft, readOnly }) {
+  if (!els.externalChangeNotice) return;
+  const text = els.externalChangeNotice.querySelector('.external-change-text');
+  if (text) {
+    text.textContent = hasDraft
+      ? '文件已被外部修改，当前草稿未保存'
+      : readOnly
+        ? '日志已被外部修改'
+        : '文件已被外部修改';
+  }
+  els.externalChangeNotice.classList.remove('hidden');
+}
+
+function hideExternalChangeNotice() {
+  els.externalChangeNotice?.classList.add('hidden');
+}
+
+/**
+ * 重载当前文档。有未保存草稿时必须走既有切换保护，不静默覆盖。
+ */
+async function reloadAfterExternalChange() {
+  if (!state.filePath || state.documentSwitchPending) return;
+  const path = state.filePath;
+  const generationAtStart = state.documentGeneration;
+
+  if (state.isDirty) {
+    const proceed = await guardDirtyDocumentSwitch({
+      isDirty: true,
+      decide: requestDirtySwitchDecision,
+      save: saveFile,
+    });
+    if (!proceed) return;
+    if (state.documentGeneration !== generationAtStart) return;
+  }
+
+  hideExternalChangeNotice();
+  await openFileByPath(path);
+}
+
 // ========== Render ==========
 function renderContent(content, renderMode = state.renderMode) {
   return renderDocumentHtml(md, content, renderMode);
@@ -949,6 +1003,10 @@ async function applyOpenedDocument(documentData, { nativeFile }) {
   els.editorTextarea.scrollTop = 0;
   els.editorPreview.scrollTop = 0;
   if (els.progressBar) els.progressBar.style.width = '0%';
+
+  // 新文档就绪后重建监听目标，并清掉上一份文档可能残留的提示。
+  hideExternalChangeNotice();
+  void externalChangeWatcher.start();
 }
 
 async function performDocumentOpen({
@@ -1087,6 +1145,10 @@ async function performSaveFile({ allowDuringSwitch = false } = {}) {
     state.sizeBytes = new TextEncoder().encode(content).byteLength;
     state.isDirty = savedState.isDirty;
     applyDocumentControls();
+    // 保存会触发文件系统事件；登记抑制窗口，避免保存后立刻弹出
+    // 「文件已被外部修改」的假提示。
+    void externalChangeWatcher.registerSelfSave();
+    hideExternalChangeNotice();
     if (savedState.isDirty) {
       els.previewBody.innerHTML = renderContent(savedState.previewContent);
       if (state.filePath) {
@@ -1501,6 +1563,12 @@ async function initNativeTauriDragDrop() {
     await listen(TauriEvent.DRAG_OVER, () => showDropOverlay());
     await listen(TauriEvent.DRAG_LEAVE, () => hideDropOverlay());
     await listen(TauriEvent.DRAG_DROP, event => handleDropPaths(event.payload?.paths || []));
+
+    // 外部修改提示：只提示 + 提供重载，不自动重载、不自动合并。
+    await listen('document-changed-externally', event => {
+      void externalChangeWatcher.handleEvent(event.payload);
+    });
+
     console.log('Tauri drag-drop event listeners registered');
     return true;
   } catch (e) {
@@ -1587,6 +1655,7 @@ els.btnSearch.addEventListener('click', toggleSearch);
 els.btnFontUp.addEventListener('click', () => changeFontSize(1));
 els.btnFontDown.addEventListener('click', () => changeFontSize(-1));
 els.btnFullWidth.addEventListener('click', toggleFullWidth);
+els.btnReloadExternal.addEventListener('click', () => reloadAfterExternalChange());
 els.searchClose.addEventListener('click', toggleSearch);
 els.searchNext.addEventListener('click', searchNext);
 els.searchPrev.addEventListener('click', searchPrev);

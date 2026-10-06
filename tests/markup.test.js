@@ -42,3 +42,16 @@ test('the welcome page advertises the full width shortcut', async () => {
 
   assert.match(html, /Ctrl\+Shift\+F/);
 });
+
+test('index exposes the external change notice with an accessible reload action', async () => {
+  const html = await readFile(new URL('../index.html', import.meta.url), 'utf8');
+  const notice = html.match(/<span\b[^>]*id=["']external-change-notice["'][^>]*>/i)?.[0];
+
+  assert.ok(notice, 'expected #external-change-notice');
+  assert.match(notice, /class=["'][^"']*\bhidden\b/, 'notice must start hidden');
+
+  const reload = html.match(/<button\b[^>]*id=["']btn-reload-external["'][^>]*>/i)?.[0];
+  assert.ok(reload, 'expected #btn-reload-external');
+  assert.match(reload, /type=["']button["']/);
+  assert.match(reload, /class=["'][^"']*external-change-action/, 'reload must be styleable');
+});

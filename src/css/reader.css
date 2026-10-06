@@ -733,6 +733,35 @@ html.full-width .markdown-body {
   gap: 16px;
 }
 
+/* 外部修改提示：只在状态栏内联显示，不遮挡正文 */
+.external-change-notice {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--dialog-danger, #8b2f26);
+  font-size: 0.85em;
+}
+
+.external-change-notice.hidden {
+  display: none;
+}
+
+.external-change-action {
+  border: 1px solid currentColor;
+  background: transparent;
+  color: inherit;
+  border-radius: 4px;
+  padding: 1px 8px;
+  font: inherit;
+  font-size: 0.95em;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.external-change-action:hover {
+  background: var(--accent-light);
+}
+
 /* ===== Reading Progress Bar ===== */
 .reading-progress {
   position: fixed;
