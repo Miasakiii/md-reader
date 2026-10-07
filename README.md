@@ -12,8 +12,9 @@
 - 📖 **优雅排版** — 衬线体正文、无衬线标题、精心调校行距字距
 - 📑 **目录导航** — 自动生成 TOC，滚动高亮当前章节
 - 🔍 **全文搜索** — Markdown、纯文本和只读日志均可搜索，实时高亮并逐个定位
-- 👁️ **外部修改提示** — 文档在外部被改动时状态栏提示并可重载；不自动重载，有未保存草稿时先走切换保护
-- ✏️ **轻量编辑** — `.md` / `.markdown` 分屏预览，`.txt` / `.tex` 纯文本编辑
+- 👁️ **外部修改提示** — 文档在外部被改动时右下角常驻提示并可重载；不自动重载，有未保存草稿时先走切换保护
+- ✏️ **轻量编辑** — `.md` / `.markdown` 分屏预览随输入实时更新（`requestAnimationFrame` 合帧，无固定延迟），预览跟随光标推进；`.txt` / `.tex` 纯文本编辑
+- 🔗 **模式切换不失位** — 阅读 ↔ 编辑切换按标题锚点交接滚动位置：编辑器与预览落到阅读时所在标题块、光标随迁到该标题行首；退出编辑时回到光标所在标题
 - ✅ **GFM 任务列表** — `- [ ]` / `- [x]` 渲染为不可交互 checkbox，勾选动作不写回文档
 - 🗂️ **Frontmatter** — 文档开头的 `---…---` 元数据块折叠展示为属性表，未闭合时按原文渲染
 - 🖼️ **本地图片** — 文档内相对路径图片正常显示；白名单按「文档目录 / `.git` 上溯到的仓库根」放行，文档位于主目录之内时另加用户主目录天花板，越界与符号链接一律拒绝。网络图片（`https://`）由浏览器直接加载
@@ -25,9 +26,9 @@
 - 📋 **系统文件关联** — 安装包仅注册 `.md` / `.markdown` / `.txt`；`.tex` / `.log` 不接管系统默认程序
 - 📄 **纯文本与 TeX 源码** — `.txt` / `.tex` 按原文显示和编辑，不执行 TeX 渲染或编译；自动识别 UTF-8 / GB18030/GBK
 - 🧾 **日志快照** — `.log` 一次性完整读取、只读展示并支持搜索；文件达到 10 MiB 时先确认
-- 🛡️ **切换保护** — 有未保存修改时，打开另一文档前可保存、放弃或取消
+- 🛡️ **切换与退出保护** — 有未保存修改时，打开另一文档前可保存、放弃或取消；关闭窗口前同样提醒（保存并退出 / 放弃修改 / 取消），保存失败会中止关闭
 - 🔒 **安全渲染** — DOMPurify 过滤 Markdown HTML 输出；生产 CSP 不含 `unsafe-eval`，开发服务器来源只在 `devCsp` 中放行
-- 🪶 **极致轻量** — 前端 gzip 约 124KB，安装包 ~8MB
+- 🪶 **极致轻量** — 前端 gzip 约 126KB，Windows 安装包约 2.3MB（便携版单 exe 约 10MB）
 - 📦 **便携版** — Windows 单 exe 免安装
 
 ## 🚀 快速开始
@@ -160,13 +161,16 @@ md-reader/
 │   │   └── editor.css          # 编辑器分屏样式
 │   └── js/
 │       ├── app.js              # 主逻辑与文档打开协调
+│       ├── close-guard.js      # 关闭拦截：未保存退出的决策与兜底
 │       ├── document-session.js # 未保存切换保护与大日志打开流程
+│       ├── document-session-state.js # 文档级状态容器（3a 归口）与迁移期只读镜像
 │       ├── asset-images.js     # 本地图片引用收集与资产地址重写
 │       ├── external-change.js  # 外部修改事件判定、监听生命周期与重载决策
 │       ├── file-library.js     # 文件目录侧栏、右键菜单与回收站流程
 │       ├── file-types.js       # 前端文档类型策略与对话框过滤器
 │       ├── link-router.js      # 渲染后链接分类与系统打开路由
 │       ├── markdown-render.js  # Markdown 引擎、frontmatter 剥离与消毒后处理
+│       ├── scroll-anchor.js    # 源码行号与渲染标题的锚点配对、位置交接与跟随
 │       ├── preferences.js      # UI 偏好（主题/字号/铺满）单一 schema 持久化
 │       ├── text-decoding.js    # 浏览器严格 UTF-8 / GB18030 解码
 │       ├── window-theme.js     # 页面与原生窗口栏主题同步
@@ -190,15 +194,18 @@ md-reader/
 │
 ├── tests/
 │   ├── asset-images.test.js   # 图片引用收集、路径解析与放行判定测试
+│   ├── close-guard.test.js     # 关闭决策、保存失败中止与二次关闭契约
 │   ├── external-change.test.js # 外部修改判定、抑制窗口与代次守卫测试
 │   ├── configuration.test.js   # 关联、权限和 CI 配置契约
 │   ├── document-session.test.js # 文档切换与大日志协调测试
+│   ├── document-session-state.test.js # 文档级状态归口、代次不变量与会话隔离
 │   ├── file-library.test.js    # 文件目录侧栏、菜单与回收站流程测试
 │   ├── file-types.test.js      # 共享策略与过滤器测试
 │   ├── link-router.test.js     # 链接分类与打开路由测试
 │   ├── markdown-render.test.js # 渲染管线、任务列表与 frontmatter 契约
 │   ├── markup.test.js          # 入口页面 DOM 契约测试
 │   ├── preferences.test.js     # 偏好解析、回退与存储失败契约
+│   ├── scroll-anchor.test.js   # 标题配对、CRLF 行号与锚点比例映射测试
 │   ├── text-decoding.test.js   # 浏览器编码回退测试
 │   └── window-theme.test.js    # 原生窗口栏主题同步测试
 │
@@ -228,9 +235,9 @@ md-reader/
 | 组件 | 原始 | Gzip |
 |------|------|------|
 | CSS | 20.7 KB | 5.0 KB |
-| JS | 327.2 KB | 116.1 KB |
-| HTML | 10.5 KB | 2.9 KB |
-| **前端总计** | **358.4 KB** | **124.0 KB** |
+| JS | 335.2 KB | 118.5 KB |
+| HTML | 11.3 KB | 3.0 KB |
+| **前端总计** | **367.2 KB** | **126.5 KB** |
 
 ## ✅ 测试
 
@@ -247,9 +254,26 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
 ```
 
-测试覆盖共享格式策略、打开/保存过滤器、`.tex` 编辑能力、`.log` 只读与 10 MiB 确认竞态、未保存切换保护、文件目录与回收站流程、外链路由分类、系统文件关联边界、窗口状态恢复、入口页面 DOM 契约，以及前端无文件系统权限。`npm test` 只匹配仓库根目录的 `tests/*.test.js`；`.github/workflows/checks.yml` 使用 Node.js 24，并执行锁定依赖安装、前端测试/构建、Rust 格式检查、测试和 Clippy。
+测试覆盖共享格式策略、打开/保存过滤器、`.tex` 编辑能力、`.log` 只读与 10 MiB 确认竞态、未保存切换保护与关闭拦截（含保存失败必须中止关闭）、文档级状态归口与代次不变量、滚动锚点交接与光标跟随、外部修改判定与抑制窗口、文件目录与回收站流程、外链路由分类、系统文件关联边界、窗口状态恢复、入口页面 DOM 契约，以及前端无文件系统权限。`npm test` 只匹配仓库根目录的 `tests/*.test.js`；`.github/workflows/checks.yml` 使用 Node.js 24，并执行锁定依赖安装、前端测试/构建、Rust 格式检查、测试和 Clippy。
 
 ## 📝 更新记录
+
+### v1.3.2（2026-10-07）
+
+- 外部修改提示：当前文档在应用之外被改动时右下角常驻提示，提供「重载 / 忽略」；不自动重载、不自动合并，有未保存草稿时先走切换保护，关闭弹窗后状态栏保留重载入口直到重载或换文档
+- 监听父目录而非文件本身（抗「写临时文件再 rename」的原子保存），500ms 防抖合并事件、同目录引用计数去重、保存后 1200ms 自保存抑制窗口
+- 修复外部修改事件订阅落在永不执行的分支（提示从未出现），以及提示在重载后永久失效（代次判定改为按路径判定）
+
+### v1.3.1（2026-10-06）
+
+- GFM 任务列表渲染为不可交互 checkbox（阅读器里的勾选动作不写回文档）；frontmatter 折叠为属性表，未闭合时按原文渲染
+- 铺满模式：`Ctrl+Shift+F` 在正文限宽居中与铺满窗口宽度之间切换，偏好随主题、字号一并持久化
+- 文档内相对路径图片正常显示；本地图片白名单全部在后端运行时逐文件放行，静态 `assetProtocol.scope` 留空不写通配
+- 主题、字号与铺满模式收敛到 `md-reader-preferences` 单一命名空间；渲染管线抽出为 `markdown-render.js`
+- 生产 CSP 收紧：`script-src` 移除 `'unsafe-inline'`、`'unsafe-eval'` 与开发服务器来源，开发期宽松值改由 Tauri 2 的 `devCsp` 承载
+- `img-src` 放行 `https:`，文档内的远程图片不再显示为破图
+- DOMPurify 升级至 3.4.16、markdown-it 升级至 14.3.2，关闭两个直接命中本项目配置的安全告警；`npm audit` 归零
+- 阅读进度改为可恢复的安全写（同目录临时文件 + 同步 + 原子替换，并保留 `.bak` 备份）
 
 ### v1.3.0（2026-08-30）
 

@@ -4,6 +4,33 @@
 
 ## [Unreleased]
 
+### Added
+
+- 编辑预览随输入实时更新：渲染由 150ms 防抖改为 `requestAnimationFrame` 合帧（同一帧内的多次输入合并为一次渲染），去掉固定延迟；新增 `renderPreviewPane()`，渲染前记录预览滚动比例、渲染后按比例还原，重写 `innerHTML` 不再把预览拉回顶部
+- 编辑时预览跟随光标（Typora 式）：重渲后按标题锚点把光标所在块锚定到预览视口，块内按源码进度取比例，随打字平滑推进；无锚点文档（纯文本、无标题）不动作，手动滚动仍走既有比例同步，两条路径互不抢占
+- 阅读 ↔ 编辑模式切换的滚动位置交接：新增 `src/js/scroll-anchor.js`，用同一 markdown-it 实例解析源码，`heading_open` token 自带行号，与渲染产物中带 `id` 的标题按出现顺序索引配对（setext、引用内、列表内标题天然一致；frontmatter 必须与渲染管线同源剥离，否则 `---` 围栏会被解析成 setext 伪标题造成两侧错位）。进入编辑时编辑器与预览落到阅读时所在标题块、光标随迁到该标题行首；退出编辑时按光标所在标题块滚回对应位置；前言区按块内比例落位；无锚点走比例降级，纯文本行为不变
+- 退出应用前提醒未保存修改：新增 `src/js/close-guard.js`，经 Tauri `onCloseRequested` 拦截后再决策，提供「取消 / 放弃修改 / 保存并退出」，文案与切换文档的对话框区分；浏览器预览降级为 `beforeunload` 兜底（框由浏览器绘制、文案不可控）
+- 编辑与搜索按钮补齐激活态与 `aria-pressed`（此前只有侧栏与铺满按钮有）
+
+### Changed
+
+- 文档级状态归口 `DocumentSession`（多标签页前置的 3a 步，**用户可见行为不变**）：16 个文档级字段（`filePath`/`rawContent`/`persistedContent`/`documentGeneration`/`editRevision`/`isEditMode`/`allowedAssets`/`scrollSaveTimer` 等）收进 `src/js/document-session-state.js` 的可实例化对象，模块级 `state` 保留为只读镜像并由 `syncDocumentStateFromSession()` 单向同步；刻意不提供通用 `update()`，改以专用 `setEncoding()` 写入，确保代次只在换/关文档时推进，避免编码落定误伤在途的保存、滚动与监听回调
+- `performSaveFile` 的编辑中保存分支改用 `renderPreviewPane`，与常规渲染共用滚动保持（此前绕过该路径导致预览跳顶）
+
+### Fixed
+
+- **窗控失效（点 X 永久无反应）**：注册 `onCloseRequested` 后 Rust 把关闭权交给 JS 包装器的 `destroy()`，而 `capabilities/default.json` 缺 `core:window:allow-destroy`，该调用被 ACL 静默拒绝，关闭按钮与 Alt+F4 一并失效（v1.3.2 没有 close-guard，故不受影响）
+- 关闭放行分支擅自 `destroy()`：`handleRequest()` 在「无需询问」分支也调用了 `performClose()`（对应 `destroy()`），绕过原生窗口管理强杀窗口。现改为只 `return { action: 'allow' }`，仅在用户明确选择「放弃修改 / 保存并退出」后才真正关闭
+- 关闭链路防呆：handler 包 `try/catch`，异常时 `preventDefault` 保住窗口（把「Rust 已 `prevent_close` 而 `destroy` 永不执行」的永久关不掉降级为可诊断）；`performClose` 已自行 destroy 时拦下包装器的第二次 destroy，避免同一窗口被关闭两次
+- 编辑预览不刷新：`onEditorChanged` 只递增扁平 `state.editRevision`，而 `isEditorSnapshotCurrent` 比对的是会话内修订号，守卫永远判定快照过期、重渲染直接 `return`。改为经 `documentSession.markEdited()` 归口
+- 编辑中打字后预览冻结、`Ctrl+E` 退出失效：`toggleEditMode` 直接翻转 `state.isEditMode`，下一次 `syncDocumentStateFromSession()` 会用会话旧值刷回，预览渲染守卫读到 `false` 早退（退出也被误判为再次进入）。改为 `documentSession.setEditMode(entering)` 归口；会话侧以 `setEditMode` 替换语义过时的 `toggleEditMode`（退出保留草稿）
+- 进入编辑时预览未落在标题处（实测偏 14.6px）：交接程序化设置 `textarea.scrollTop` 触发的异步 scroll 事件用滚动百分比覆盖了刚设置的锚点定位。交接期间置抑制标志（双 rAF 清除）
+- `.txt` 与代码块的中文观感呈衬线：`--font-mono` 栈（JetBrains Mono / Fira Code / Cascadia / Consolas）均不含 CJK 字形，中文一路回退到浏览器默认字体。补 `Microsoft YaHei` 后 CJK 走雅黑、西文仍走既有 mono 链
+
+### Security
+
+- `capabilities/default.json` 新增 `core:window:allow-destroy`——这是 `onCloseRequested` 语义下的必需权限（Rust 对「有 JS 监听器」的窗口 `prevent_close`，最终关闭由包装器 `destroy()` 完成）。新增契约测试同时锁定两条：该权限必须存在，且不得放宽 `close`/`hide`/`show`/`minimize`/`maximize`/`unminimize`/`unmaximize`/`set-fullscreen` 中任何一项
+
 ## [1.3.2] - 2026-10-07
 
 ### Added
