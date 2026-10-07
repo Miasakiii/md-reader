@@ -257,3 +257,40 @@ test('the close guard never destroys the window on a plain pass-through', async 
   const confirmed = source.slice(source.indexOf('closeInProgress = true;'));
   assert.match(confirmed, /performClose\(\)/, 'a confirmed close must actually close the window');
 });
+
+test('the edit-mode flag is routed through the document session', async () => {
+  const source = await readFile(new URL('../src/js/app.js', import.meta.url), 'utf8');
+  const toggle = source.slice(
+    source.indexOf('async function toggleEditMode()'),
+    source.indexOf('// ========== Theme =========='),
+  );
+
+  // 回归：直接翻转 state.isEditMode 会在下一次打字时被
+  // syncDocumentStateFromSession 刷回会话里的旧值——预览渲染守卫读到
+  // false 而早退、Ctrl+E 退出被误判为再次进入。编辑态必须经会话归口。
+  assert.match(toggle, /documentSession\.setEditMode\(/);
+  assert.doesNotMatch(toggle, /state\.isEditMode\s*=\s*!/);
+});
+
+test('the read-to-edit handover suppresses the textarea ratio scroll sync', async () => {
+  const source = await readFile(new URL('../src/js/app.js', import.meta.url), 'utf8');
+
+  // 回归：程序化交接滚动会异步触发 textarea 的 scroll 事件，比例同步若
+  // 不受抑制，会用滚动百分比覆盖交接刚设置好的预览锚点定位（长文档实测
+  // 偏移 14.6px，预览没有落在同一标题处）。
+  const handover = source.slice(
+    source.indexOf('function handoverReadToEditor('),
+    source.indexOf('function handoverEditorToRead('),
+  );
+  assert.match(handover, /suppressScrollSyncForHandover\(\)/);
+  assert.ok(
+    handover.indexOf('suppressScrollSyncForHandover()') < handover.indexOf('editorTextarea.scrollTop'),
+    'the suppression must be armed before the programmatic scroll',
+  );
+
+  const sync = source.slice(
+    source.indexOf("els.editorTextarea.addEventListener('scroll'"),
+    source.indexOf('// ========== Event Bindings =========='),
+  );
+  assert.match(sync, /scrollSyncSuppressed/, 'the ratio sync must respect the suppression flag');
+});

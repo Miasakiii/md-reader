@@ -109,13 +109,20 @@ export function createDocumentSession({ onChange = () => {} } = {}) {
     return isOpen() && !doc.readOnly;
   }
 
-  function toggleEditMode() {
-    if (!canEdit()) return snapshot();
-    doc.isEditMode = !doc.isEditMode;
-    if (!doc.isEditMode) {
-      // 回到阅读态时，编辑框内容以当前磁盘内容为准。
-      doc.rawContent = doc.persistedContent;
-    }
+  /**
+   * 设置编辑态（显式值，非 toggle）。
+   *
+   * app.js 的 Ctrl+E 流程要先采样滚动/光标位置、再决定目标状态，由调用方
+   * 给出进入或退出的最终值，会话只负责存储与广播——toggle 语义留在 app
+   * 层，避免两侧各自翻转导致状态分叉。
+   *
+   * 退出（false）**不**把 rawContent 回退到磁盘内容：草稿保留是 15f126e
+   * 起的产品语义（退出未保存提醒依赖草稿仍在），内容由 markEdited 持续
+   * 跟踪。不做 canEdit 守卫——静默拒绝会让 state 镜像与 UI 分叉，守卫
+   * 属调用方（app 层负责提示）。
+   */
+  function setEditMode(editMode) {
+    doc.isEditMode = Boolean(editMode);
     onChange('edit-mode', snapshot());
     return snapshot();
   }
@@ -198,7 +205,7 @@ export function createDocumentSession({ onChange = () => {} } = {}) {
     canEdit,
     open,
     close,
-    toggleEditMode,
+    setEditMode,
     markEdited,
     reconcileSave,
     markExternallyChanged,

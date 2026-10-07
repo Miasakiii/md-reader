@@ -61,26 +61,29 @@ test('a closed session advances the generation too', () => {
   assert.equal(session.isOpen(), false);
 });
 
-test('read-only documents cannot enter edit mode', () => {
+test('read-only documents report they cannot be edited', () => {
   const session = createDocumentSession();
   openSample(session, { readOnly: true, path: 'C:/logs/app.log', renderMode: 'plain' });
 
+  // 守卫属调用方（app 层负责提示）；setEditMode 不做静默拒绝，
+  // 否则 state 镜像与 UI 会分叉。
   assert.equal(session.canEdit(), false);
-  assert.equal(session.toggleEditMode().isEditMode, false);
+  assert.equal(session.snapshot().isEditMode, false);
 });
 
-test('edit mode toggles for editable documents and returns content on exit', () => {
+test('setEditMode stores the caller-decided value and keeps the draft on exit', () => {
   const session = createDocumentSession();
   openSample(session);
 
-  assert.equal(session.toggleEditMode().isEditMode, true);
+  assert.equal(session.setEditMode(true).isEditMode, true);
 
   session.markEdited('# 指南\n\n改过的正文');
-  const afterEdit = session.toggleEditMode();
+  const afterEdit = session.setEditMode(false);
 
   assert.equal(afterEdit.isEditMode, false);
-  // 回到阅读态应以磁盘内容为准，而不是停留在草稿上。
-  assert.equal(afterEdit.rawContent, afterEdit.persistedContent);
+  // 退出编辑态保留草稿：退出未保存提醒依赖草稿仍在。
+  assert.equal(afterEdit.rawContent, '# 指南\n\n改过的正文');
+  assert.notEqual(afterEdit.rawContent, afterEdit.persistedContent);
 });
 
 test('editing marks the document dirty only when content actually differs', () => {

@@ -1384,12 +1384,32 @@ function measureTextareaOffsetTop(textarea, source, offset) {
 }
 
 /**
+ * 交接期间抑制 textarea → 预览的比例滚动同步。
+ *
+ * 交接会把 textarea 程序化滚到锚点，其 scroll 事件**异步**派发，随后
+ * 比例同步用滚动百分比覆盖预览——刚锚定的标题块被换成「按比例猜」的
+ * 位置（长文档实测偏移 14.6px）。scroll 事件在下一次渲染更新、rAF
+ * 回调之前派发，因此双 rAF 后清除即可覆盖程序化赋值产生的事件、又
+ * 不吞真实用户滚动（textarea 无平滑滚动，事件至多延后一帧）。
+ */
+let scrollSyncSuppressed = false;
+function suppressScrollSyncForHandover() {
+  scrollSyncSuppressed = true;
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      scrollSyncSuppressed = false;
+    });
+  });
+}
+
+/**
  * 阅读位 → 编辑位：编辑器与预览都落在阅读时所在的标题块顶部，
  * 光标一并移到该标题行首（否则视口在标题处而光标还在文档顶部）。
  * 无锚点（前言区/纯文本/无标题文档）走比例降级。
  */
 function handoverReadToEditor(anchorIndex, readRatio) {
   const source = els.editorTextarea.value;
+  suppressScrollSyncForHandover();
   if (anchorIndex >= 0) {
     const anchor = extractSourceHeadings(md, source)[anchorIndex];
     const target = getAnchoredHeadingElements(els.previewBody)[anchorIndex];
@@ -1454,7 +1474,12 @@ async function toggleEditMode() {
     ratio: scrollPercentage(els.editorPreview),
   };
 
-  state.isEditMode = !state.isEditMode;
+  // 编辑态经会话归口：`state` 是会话的只读镜像，`onEditorChanged` 每次
+  // 打字都会 syncDocumentStateFromSession 把会话值刷回来——直接翻转
+  // `state.isEditMode` 会在第一次输入后被会话里的旧值覆盖，导致预览
+  // 渲染守卫（!state.isEditMode）早退、Ctrl+E 退出被误判为再次进入。
+  documentSession.setEditMode(entering);
+  syncDocumentStateFromSession();
 
   if (state.isEditMode) {
     els.editorTextarea.value = state.rawContent;
@@ -2036,8 +2061,10 @@ els.editorPreview.addEventListener('scroll', () => {
 });
 
 // ========== Scroll Sync (Edit Mode) ==========
+// 用户手动滚动 textarea 时按比例同步预览；模式交接的程序化滚动由
+// scrollSyncSuppressed 抑制（见 handoverReadToEditor），避免覆盖锚点定位。
 els.editorTextarea.addEventListener('scroll', () => {
-  if (!state.isEditMode) return;
+  if (!state.isEditMode || scrollSyncSuppressed) return;
   const maxEditorScroll = els.editorTextarea.scrollHeight - els.editorTextarea.clientHeight;
   const pct = maxEditorScroll > 0 ? els.editorTextarea.scrollTop / maxEditorScroll : 0;
   const preview = els.editorPreview;
