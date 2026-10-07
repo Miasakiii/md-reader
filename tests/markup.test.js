@@ -232,6 +232,8 @@ test('editor input schedules the preview through rAF, not a timer', async () => 
   assert.match(handler, /requestAnimationFrame/, 'preview must repaint on the next frame');
   assert.doesNotMatch(handler, /setTimeout/, 'a fixed delay makes the preview feel laggy');
   assert.doesNotMatch(source, /previewTimer/, 'the old debounce timer must be gone');
+  // 每次重渲后预览必须跟随光标所在的标题块（Typora 式跟随）。
+  assert.match(handler, /followPreviewToCaret\(\)/, 'the preview must follow the caret');
 });
 
 test('the close guard never destroys the window on a plain pass-through', async () => {

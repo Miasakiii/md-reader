@@ -1737,6 +1737,7 @@ function onEditorChanged() {
     if (!state.isEditMode || state.readOnly) return;
     const content = els.editorTextarea.value;
     renderPreviewPane(content);
+    followPreviewToCaret();
   });
 }
 
@@ -1766,6 +1767,41 @@ function renderPreviewPane(content) {
 
   refreshTOC();
   updateStatusInfo(content);
+}
+
+/**
+ * 预览跟随光标：把光标所在的标题块锚定到预览视口（Typora 式跟随）。
+ * 锚点在块内按源码进度取比例，随打字平滑推进，跨块时对齐到块顶。
+ * 无锚点文档（纯文本、无标题）不动作——视觉稳定由 renderPreviewPane
+ * 的比例保持负责；手动滚动 textarea 时也不触发（那走滚动同步映射）。
+ */
+function followPreviewToCaret() {
+  if (state.readOnly || state.renderMode !== 'markdown') return;
+  const source = els.editorTextarea.value;
+  const anchors = extractSourceHeadings(md, source);
+  if (anchors.length === 0) return;
+  const located = locateOffsetInAnchors(
+    anchors,
+    els.editorTextarea.selectionStart ?? 0,
+    source.length,
+  );
+  const targets = getAnchoredHeadingElements(els.previewBody);
+  if (targets.length === 0) return;
+
+  const maxScroll = els.editorPreview.scrollHeight - els.editorPreview.clientHeight;
+  let anchorPoint;
+  if (located.index >= 0) {
+    const target = targets[located.index];
+    if (!target) return;
+    const startTop = contentTopWithin(els.editorPreview, target);
+    const endTop = located.index + 1 < targets.length
+      ? contentTopWithin(els.editorPreview, targets[located.index + 1])
+      : els.previewBody.offsetHeight;
+    anchorPoint = startTop + located.fraction * (endTop - startTop);
+  } else {
+    anchorPoint = located.fraction * contentTopWithin(els.editorPreview, targets[0]);
+  }
+  els.editorPreview.scrollTop = Math.min(Math.max(0, anchorPoint), maxScroll);
 }
 
 els.editorTextarea.addEventListener('input', onEditorChanged);
