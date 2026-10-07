@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.3.3] - 2026-10-08
+
 ### Added
 
 - 编辑预览随输入实时更新：渲染由 150ms 防抖改为 `requestAnimationFrame` 合帧（同一帧内的多次输入合并为一次渲染），去掉固定延迟；新增 `renderPreviewPane()`，渲染前记录预览滚动比例、渲染后按比例还原，重写 `innerHTML` 不再把预览拉回顶部
