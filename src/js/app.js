@@ -562,11 +562,22 @@ async function initCloseGuard() {
     const windowApi = await getTauriWindow();
     const current = windowApi.getCurrentWindow();
     await current.onCloseRequested(async event => {
-      if (closeGuard.isClosing()) return;
-      const { action } = await closeGuard.handleRequest();
-      // 已确认关闭或正在关闭流程中：放行。
-      if (action === 'allow') return;
-      event.preventDefault();
+      try {
+        if (closeGuard.isClosing()) return;
+        const { action } = await closeGuard.handleRequest();
+        // 已确认关闭或正在关闭流程中：放行。但 performClose 已自行
+        // destroy 过，须拦下包装器随放行语义补的第二次 destroy。
+        if (action === 'allow') {
+          if (closeGuard.isClosing()) event.preventDefault();
+          return;
+        }
+        event.preventDefault();
+      } catch (error) {
+        // 异常时保住窗口：否则 Rust 已 prevent_close 而包装器的
+        // destroy 永不执行，窗口会永久关不掉（窗控失效症状）。
+        console.warn('Close guard handler failed:', error?.message || error);
+        try { event.preventDefault(); } catch { /* ignore */ }
+      }
     });
   } catch (error) {
     console.warn('Close guard unavailable:', error?.message || error);

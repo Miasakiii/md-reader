@@ -89,6 +89,25 @@ test('Tauri grants only the narrow window mutation needed for theme sync', () =>
   assert.deepEqual(windowMutationPermissions, ['core:window:allow-set-theme']);
 });
 
+test('the close guard keeps its required destroy permission and nothing broader', () => {
+  // close-guard 注册 onCloseRequested 后，Rust 侧对「有 JS 监听器」的窗口
+  // prevent_close，最终关闭由 JS 侧 destroy() 完成（Tauri 官方包装器语义）。
+  // 缺 allow-destroy 时 destroy 被 ACL 静默拒绝：点 X 永久无反应（窗控失效）。
+  const capabilities = readProjectJson('src-tauri/capabilities/default.json');
+  const windowPermissions = capabilities.permissions
+    .map(permission => typeof permission === 'string' ? permission : permission?.identifier)
+    .filter(identifier => identifier?.startsWith('core:window:'));
+
+  assert.ok(
+    windowPermissions.includes('core:window:allow-destroy'),
+    'close guard requires core:window:allow-destroy',
+  );
+  const destructive = windowPermissions.filter(identifier =>
+    /allow-(close|hide|show|minimize|maximize|unminimize|unmaximize|set-fullscreen)$/.test(identifier),
+  );
+  assert.deepEqual(destructive, [], 'no broader window operations may be granted');
+});
+
 test('the asset protocol stays unscoped and is enabled for local images', () => {
   const tauriConfig = readProjectJson('src-tauri/tauri.conf.json');
   const assetProtocol = tauriConfig.app.security.assetProtocol;
