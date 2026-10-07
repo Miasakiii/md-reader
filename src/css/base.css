@@ -39,7 +39,7 @@
   /* 排版 */
   --font-sans: "Inter", "SF Pro Text", -apple-system, BlinkMacSystemFont, "Noto Sans SC", "Microsoft YaHei", "Segoe UI", Helvetica, Arial, sans-serif;
   --font-serif: "Noto Serif SC", "Source Han Serif SC", "Georgia", "Times New Roman", serif;
-  --font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code", "SF Mono", Consolas, monospace;
+  --font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code", "SF Mono", Consolas, "Microsoft YaHei", monospace;
   --font-size: 16px;
   --line-height: 1.8;
   --content-width: 720px;
