@@ -8,6 +8,7 @@ release/
 .agents/
 .codex/
 .commandcode/
+.workbuddy/
 .worktrees/
 worktrees/
 tmp-*/
