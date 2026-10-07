@@ -188,6 +188,40 @@ test('the preview pane re-render keeps its scroll position', async () => {
   );
 });
 
+test('mode toggles hand the scroll position over through the anchors', async () => {
+  const source = await readFile(new URL('../src/js/app.js', import.meta.url), 'utf8');
+  const toggle = source.slice(
+    source.indexOf('async function toggleEditMode()'),
+    source.indexOf('// ========== Theme =========='),
+  );
+
+  // 交接信息必须在切换前采样：进入方向取阅读位，退出方向取光标位。
+  assert.match(toggle, /findReadViewAnchorIndex\(\)/);
+  assert.match(toggle, /selectionStart/);
+  assert.match(toggle, /handoverReadToEditor\(/);
+  assert.match(toggle, /handoverEditorToRead\(/);
+  // focus 会把旧光标位置滚进视口，进入方向的交接必须发生在其后。
+  assert.ok(
+    toggle.indexOf('focus()') < toggle.indexOf('handoverReadToEditor('),
+    'the read-to-edit handover must run after focus restores the caret',
+  );
+});
+
+test('saving mid-edit reuses the scroll-preserving preview renderer', async () => {
+  const source = await readFile(new URL('../src/js/app.js', import.meta.url), 'utf8');
+  const save = source.slice(
+    source.indexOf('async function performSaveFile('),
+    source.indexOf('function saveFile()'),
+  );
+
+  assert.match(save, /renderPreviewPane\(savedState\.previewContent\)/);
+  assert.doesNotMatch(
+    save,
+    /previewBody\.innerHTML\s*=/,
+    'bare innerHTML resets the preview scroll position',
+  );
+});
+
 test('editor input schedules the preview through rAF, not a timer', async () => {
   const source = await readFile(new URL('../src/js/app.js', import.meta.url), 'utf8');
   const handler = source.slice(

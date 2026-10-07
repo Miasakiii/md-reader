@@ -33,6 +33,10 @@ import {
 import { createDocumentSession } from './document-session-state.js';
 import { createCloseGuard } from './close-guard.js';
 import {
+  extractSourceHeadings,
+  locateOffsetInAnchors,
+} from './scroll-anchor.js';
+import {
   createExternalChangeWatcher,
   planReload,
 } from './external-change.js';
@@ -1272,12 +1276,8 @@ async function performSaveFile({ allowDuringSwitch = false } = {}) {
     void externalChangeWatcher.registerSelfSave();
     hideExternalChangeNotice();
     if (savedState.isDirty) {
-      els.previewBody.innerHTML = renderContent(savedState.previewContent);
-      if (state.filePath) {
-        rewriteImageSources(els.previewBody, state.allowedAssets, state.filePath);
-      }
-      refreshTOC();
-      updateStatusInfo(savedState.previewContent);
+      // 复用滚动保持的渲染助手：编辑中保存后仍有草稿时，预览不得跳顶。
+      renderPreviewPane(savedState.previewContent);
     } else {
       if (previewFrame !== null) cancelAnimationFrame(previewFrame);
       previewFrame = null;
@@ -1304,6 +1304,137 @@ function saveFile() {
   return serializeDocumentMutation(() => performSaveFile());
 }
 
+// ========== Scroll Anchors（模式交接与预览跟随） ==========
+/**
+ * 渲染产物里带 id 的标题元素，按文档顺序排列——与 scroll-anchor 的
+ * extractSourceHeadings（同一引擎解析同一源码）按索引一一配对。
+ */
+function getAnchoredHeadingElements(root) {
+  if (!root) return [];
+  return [...root.querySelectorAll('h1[id],h2[id],h3[id],h4[id],h5[id],h6[id]')];
+}
+
+/** 元素在滚动容器内容坐标系里的纵向位置（与当前滚动无关）。 */
+function contentTopWithin(scrollEl, element) {
+  return element.getBoundingClientRect().top - scrollEl.getBoundingClientRect().top + scrollEl.scrollTop;
+}
+
+/** 滚动容器，让元素顶端对齐视口顶部。 */
+function scrollElementToTop(scrollEl, element) {
+  scrollEl.scrollTop = contentTopWithin(scrollEl, element);
+}
+
+/**
+ * 阅读视图当前的标题锚点序号。-1 表示在前言区（或无锚点）。
+ * 与 updateActiveHeading 用同一条判定线（SCROLL_SPY_OFFSET / 到底），
+ * 但不默认取第一个标题：前言区交接应落在文档顶部而非第一个标题。
+ */
+function findReadViewAnchorIndex() {
+  const headings = getAnchoredHeadingElements(els.markdownBody);
+  if (headings.length === 0) return -1;
+
+  const rootRect = els.readerView.getBoundingClientRect();
+  let active = null;
+  for (const heading of headings) {
+    if (heading.getBoundingClientRect().top - rootRect.top <= SCROLL_SPY_OFFSET) {
+      active = heading;
+    } else {
+      break;
+    }
+  }
+  if (
+    els.readerView.scrollTop + els.readerView.clientHeight
+      >= els.readerView.scrollHeight - 4
+  ) {
+    active = headings[headings.length - 1];
+  }
+  return active ? headings.indexOf(active) : -1;
+}
+
+let editorMeasureMirror = null;
+/**
+ * 源码偏移在 textarea 里的纵向位置（含软换行后的实际行高）。
+ * 行号不能直接乘行高——长段落会软换行；用同字体同宽的镜像量取。
+ */
+function measureTextareaOffsetTop(textarea, source, offset) {
+  if (!editorMeasureMirror) {
+    editorMeasureMirror = document.createElement('div');
+    editorMeasureMirror.setAttribute('aria-hidden', 'true');
+    editorMeasureMirror.style.position = 'absolute';
+    editorMeasureMirror.style.top = '-9999px';
+    editorMeasureMirror.style.visibility = 'hidden';
+    editorMeasureMirror.style.whiteSpace = 'pre-wrap';
+    editorMeasureMirror.style.overflowWrap = 'break-word';
+    document.body.appendChild(editorMeasureMirror);
+  }
+  const style = getComputedStyle(textarea);
+  const mirror = editorMeasureMirror;
+  mirror.style.fontFamily = style.fontFamily;
+  mirror.style.fontSize = style.fontSize;
+  mirror.style.fontWeight = style.fontWeight;
+  mirror.style.fontStyle = style.fontStyle;
+  mirror.style.lineHeight = style.lineHeight;
+  mirror.style.letterSpacing = style.letterSpacing;
+  mirror.style.tabSize = style.tabSize;
+  mirror.style.width = `${textarea.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)}px`;
+  mirror.textContent = source.slice(0, offset);
+  const height = mirror.offsetHeight;
+  mirror.textContent = '';
+  return parseFloat(style.paddingTop) + height;
+}
+
+/**
+ * 阅读位 → 编辑位：编辑器与预览都落在阅读时所在的标题块顶部，
+ * 光标一并移到该标题行首（否则视口在标题处而光标还在文档顶部）。
+ * 无锚点（前言区/纯文本/无标题文档）走比例降级。
+ */
+function handoverReadToEditor(anchorIndex, readRatio) {
+  const source = els.editorTextarea.value;
+  if (anchorIndex >= 0) {
+    const anchor = extractSourceHeadings(md, source)[anchorIndex];
+    const target = getAnchoredHeadingElements(els.previewBody)[anchorIndex];
+    if (anchor && target) {
+      els.editorTextarea.setSelectionRange(anchor.startOffset, anchor.startOffset);
+      els.editorTextarea.scrollTop = measureTextareaOffsetTop(els.editorTextarea, source, anchor.startOffset);
+      scrollElementToTop(els.editorPreview, target);
+      return;
+    }
+  }
+  els.editorTextarea.scrollTop = readRatio * (els.editorTextarea.scrollHeight - els.editorTextarea.clientHeight);
+  els.editorPreview.scrollTop = readRatio * (els.editorPreview.scrollHeight - els.editorPreview.clientHeight);
+}
+
+/** 编辑位 → 阅读位：按光标所在标题块交接，无锚点走预览比例降级。 */
+function handoverEditorToRead({ offset, ratio }) {
+  const source = els.editorTextarea.value;
+  const located = locateOffsetInAnchors(
+    extractSourceHeadings(md, source),
+    offset,
+    source.length,
+  );
+  if (!located.anchored) {
+    els.readerView.scrollTop = ratio * (els.readerView.scrollHeight - els.readerView.clientHeight);
+    return;
+  }
+
+  const headings = getAnchoredHeadingElements(els.markdownBody);
+  if (located.index >= 0) {
+    const target = headings[located.index];
+    if (target) {
+      scrollElementToTop(els.readerView, target);
+      return;
+    }
+  }
+  // 前言区：按块内比例落在 [文档头, 第一个标题) 区间。
+  const first = headings[0];
+  if (first) {
+    const firstTop = contentTopWithin(els.readerView, first);
+    els.readerView.scrollTop = located.fraction * firstTop;
+    return;
+  }
+  els.readerView.scrollTop = ratio * (els.readerView.scrollHeight - els.readerView.clientHeight);
+}
+
 // ========== Mode Toggle ==========
 async function toggleEditMode() {
   if (documentInteractionLocked()) {
@@ -1314,6 +1445,15 @@ async function toggleEditMode() {
     showToast(ERROR_MESSAGES.readonly_file, 'info');
     return;
   }
+  // 交接信息必须在切换前采样：进入方向取阅读位，退出方向取光标位。
+  const entering = !state.isEditMode;
+  const readAnchorIndex = entering ? findReadViewAnchorIndex() : -1;
+  const readRatio = entering ? scrollPercentage(els.readerView) : 0;
+  const exitCaret = entering ? null : {
+    offset: els.editorTextarea.selectionStart ?? 0,
+    ratio: scrollPercentage(els.editorPreview),
+  };
+
   state.isEditMode = !state.isEditMode;
 
   if (state.isEditMode) {
@@ -1325,12 +1465,15 @@ async function toggleEditMode() {
     refreshTOC();
     applyModeVisibility();
     els.editorTextarea.focus();
+    // focus 会把光标（旧位置）滚进视口，交接在其后覆盖滚动与光标。
+    handoverReadToEditor(readAnchorIndex, readRatio);
   } else {
     if (previewFrame !== null) cancelAnimationFrame(previewFrame);
     previewFrame = null;
     state.rawContent = els.editorTextarea.value;
     applyModeVisibility();
     await updateView(state.rawContent);
+    handoverEditorToRead(exitCaret);
   }
 }
 
